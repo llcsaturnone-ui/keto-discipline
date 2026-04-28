@@ -27,7 +27,7 @@
       --violet: #a78bfa;
       --shadow: 0 22px 80px rgba(0,0,0,.45);
       --radius: 22px;
-      --bottom-nav: 82px;
+      --bottom-nav: 68px;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, Segoe UI, Roboto, Arial, sans-serif;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -44,7 +44,7 @@
       overflow-y: auto;
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
-      padding: max(env(safe-area-inset-top), 14px) 14px calc(var(--bottom-nav) + max(env(safe-area-inset-bottom), 18px));
+      padding: max(env(safe-area-inset-top), 14px) 14px calc(var(--bottom-nav) + 10px);
       background:
         radial-gradient(circle at 15% -10%, rgba(34,197,94,.18), transparent 35%),
         radial-gradient(circle at 100% 5%, rgba(56,189,248,.15), transparent 32%),
@@ -111,12 +111,12 @@
     .totalBox { padding: 10px 7px; border-radius: 16px; background: rgba(15,23,42,.72); border:1px solid var(--line); text-align:center; }
     .totalBox b { display:block; font-size: 16px; }
     .totalBox span { color: var(--muted); font-size: 11px; }
-    .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: rgba(5,7,10,.84); border-top: 1px solid var(--line); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); display:grid; grid-template-columns: repeat(6, 1fr); gap: 5px; transform: translateZ(0); }
-    .tab { min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 3px; height: 58px; border-radius: 17px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 800; }
+    .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 6px 8px 6px; background: rgba(5,7,10,.84); border-top: 1px solid var(--line); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); display:grid; grid-template-columns: repeat(6, 1fr); gap: 5px; transform: translateZ(0); }
+    .tab { min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 3px; height: 52px; border-radius: 17px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 800; }
     .tab .ico { font-size: 19px; line-height:1; }
     .tab.active { color:#dcfce7; background: rgba(34,197,94,.16); }
     .empty { color: var(--muted); text-align:center; padding: 22px 8px; border:1px dashed var(--line); border-radius: 18px; font-size:13px; }
-    .toast { position:fixed; left:14px; right:14px; bottom: calc(var(--bottom-nav) + max(env(safe-area-inset-bottom), 20px)); z-index: 50; padding: 13px 14px; border-radius: 18px; background: rgba(15,23,42,.95); border:1px solid var(--line); box-shadow: var(--shadow); color:#e2e8f0; opacity:0; pointer-events:none; transform: translateY(8px); transition: .18s ease; }
+    .toast { position:fixed; left:14px; right:14px; bottom: calc(var(--bottom-nav) + 10px); z-index: 50; padding: 13px 14px; border-radius: 18px; background: rgba(15,23,42,.95); border:1px solid var(--line); box-shadow: var(--shadow); color:#e2e8f0; opacity:0; pointer-events:none; transform: translateY(8px); transition: .18s ease; }
     .toast.show { opacity:1; transform: none; }
     .modalBackdrop { position:fixed; inset:0; z-index: 60; background: rgba(0,0,0,.62); display:none; align-items:flex-end; padding: 12px; }
     .modalBackdrop.show { display:flex; }
@@ -182,15 +182,23 @@
     const [y,m,d] = iso.split('-').map(Number);
     return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' });
   };
+  const isoParts = (iso) => String(iso || todayISO()).split('-').map(Number);
+  const isoFromDate = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
   const dayDiff = (a,b) => {
-    const da = new Date(a + 'T00:00:00');
-    const db = new Date(b + 'T00:00:00');
-    return Math.round((db - da) / 86400000);
+    const [ay,am,ad] = isoParts(a);
+    const [by,bm,bd] = isoParts(b);
+    return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
   };
   const addDays = (iso, n) => {
-    const d = new Date(iso + 'T00:00:00');
-    d.setDate(d.getDate() + n);
-    return d.toISOString().slice(0,10);
+    const [y,m,d] = isoParts(iso);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() + n);
+    return isoFromDate(date);
   };
 
   const defaultState = {
