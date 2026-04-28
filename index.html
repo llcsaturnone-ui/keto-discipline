@@ -31,12 +31,19 @@
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, Segoe UI, Roboto, Arial, sans-serif;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
-    body { overflow-x: hidden; }
+    html, body { margin: 0; width: 100%; height: 100%; min-height: 100%; background: var(--bg); color: var(--text); overscroll-behavior: none; }
+    body { position: fixed; inset: 0; overflow: hidden; }
     button, input, select, textarea { font: inherit; }
     button { cursor: pointer; border: 0; }
     .app {
-      min-height: 100svh;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100dvh;
+      min-height: 100dvh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
       padding: max(env(safe-area-inset-top), 14px) 14px calc(var(--bottom-nav) + max(env(safe-area-inset-bottom), 18px));
       background:
         radial-gradient(circle at 15% -10%, rgba(34,197,94,.18), transparent 35%),
@@ -104,7 +111,7 @@
     .totalBox { padding: 10px 7px; border-radius: 16px; background: rgba(15,23,42,.72); border:1px solid var(--line); text-align:center; }
     .totalBox b { display:block; font-size: 16px; }
     .totalBox span { color: var(--muted); font-size: 11px; }
-    .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 8px 10px max(env(safe-area-inset-bottom), 8px); background: rgba(5,7,10,.84); border-top: 1px solid var(--line); backdrop-filter: blur(18px); display:grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+    .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: rgba(5,7,10,.84); border-top: 1px solid var(--line); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); display:grid; grid-template-columns: repeat(6, 1fr); gap: 5px; transform: translateZ(0); }
     .tab { min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 3px; height: 58px; border-radius: 17px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 800; }
     .tab .ico { font-size: 19px; line-height:1; }
     .tab.active { color:#dcfce7; background: rgba(34,197,94,.16); }
