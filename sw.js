@@ -1,4 +1,4 @@
-const CACHE_NAME = 'keto-discipline-v1-2';
+const CACHE_NAME = 'keto-discipline-v4';
 const APP_SHELL = [
   './',
   './index.html',
