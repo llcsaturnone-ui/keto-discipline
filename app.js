@@ -118,6 +118,9 @@ function normalizeState(data) {
   });
   data.operations.forEach((operation) => {
     if (!Array.isArray(operation.attachments)) operation.attachments = [];
+    operation.attachments.forEach((file) => {
+      if (!file.id) file.id = createId("file");
+    });
   });
   data.workerContracts.forEach((contract) => {
     if (contract.monthlyAmount === undefined) contract.monthlyAmount = 0;
@@ -179,6 +182,7 @@ function bindEvents() {
   });
   document.getElementById("dialogSaveBtn").addEventListener("click", () => saveDialogItem(settingsForm));
   document.getElementById("dialogCancelBtn").addEventListener("click", closeSettingsDialog);
+  document.getElementById("attachmentCloseBtn").addEventListener("click", closeAttachmentViewer);
   document.getElementById("exportDataBtn").addEventListener("click", exportData);
   document.getElementById("importJsonBtn").addEventListener("click", () => document.getElementById("importJsonInput").click());
   document.getElementById("importJsonInput").addEventListener("change", importJson);
@@ -350,6 +354,12 @@ function bindOperationActions() {
   });
   document.querySelectorAll("[data-archive-operation]").forEach((button) => {
     button.addEventListener("click", () => archiveOperation(button.dataset.archiveOperation));
+  });
+  document.querySelectorAll("[data-open-attachment]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openAttachmentViewer(button.dataset.openAttachment);
+    });
   });
 }
 
@@ -578,8 +588,8 @@ function operationRow({ id, title, meta, amount, amountClass, operation }) {
       </div>
       ${operationsEditMode ? `
         <div class="operation-actions">
-          <button type="button" class="icon-mini" data-edit-operation="${id}" aria-label="Редактировать операцию">✎</button>
-          <button type="button" class="icon-mini" data-archive-operation="${id}" aria-label="В архив">↧</button>
+          <button type="button" class="icon-mini" data-edit-operation="${id}" aria-label="Редактировать операцию">${iconSvg("edit")}</button>
+          <button type="button" class="icon-mini" data-archive-operation="${id}" aria-label="В архив">${iconSvg("archive")}</button>
         </div>
       ` : ""}
       ${expandedOperationId === id ? renderOperationDetails(operation) : ""}
@@ -636,9 +646,53 @@ function operationDetails(operation) {
 
 function renderAttachment(file) {
   if (file.type?.startsWith("image/")) {
-    return `<img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(file.name || "Фото")}" />`;
+    return `
+      <button type="button" class="attachment-tile" data-open-attachment="${escapeAttr(file.id)}" aria-label="Открыть ${escapeAttr(file.name || "фото")}">
+        <img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(file.name || "Фото")}" />
+      </button>
+    `;
   }
-  return `<a href="${escapeAttr(file.dataUrl)}" download="${escapeAttr(file.name || "file")}">${escapeHtml(file.name || "Файл")}</a>`;
+  return `
+    <button type="button" class="attachment-tile" data-open-attachment="${escapeAttr(file.id)}" aria-label="Открыть ${escapeAttr(file.name || "файл")}">
+      <span class="attachment-file">${escapeHtml(file.name || "Файл")}</span>
+    </button>
+  `;
+}
+
+function openAttachmentViewer(fileId) {
+  const file = findAttachment(fileId);
+  if (!file) return notify("Вложение не найдено");
+  const title = file.name || "Вложение";
+  const dialog = document.getElementById("attachmentDialog");
+  const preview = document.getElementById("attachmentPreview");
+  const openLink = document.getElementById("attachmentOpenLink");
+  const downloadLink = document.getElementById("attachmentDownloadLink");
+  document.getElementById("attachmentTitle").textContent = title;
+  preview.innerHTML = file.type?.startsWith("image/")
+    ? `<img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(title)}" />`
+    : `<div class="attachment-file">${escapeHtml(title)}</div>`;
+  openLink.href = file.dataUrl;
+  downloadLink.href = file.dataUrl;
+  downloadLink.download = title;
+  if (typeof dialog.showModal === "function") {
+    if (!dialog.open) dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+function closeAttachmentViewer() {
+  const dialog = document.getElementById("attachmentDialog");
+  if (dialog?.open && typeof dialog.close === "function") dialog.close();
+  else dialog?.removeAttribute("open");
+}
+
+function findAttachment(fileId) {
+  for (const operation of state.operations) {
+    const file = (operation.attachments || []).find((item) => item.id === fileId);
+    if (file) return file;
+  }
+  return null;
 }
 
 function renderAddForm() {
@@ -833,7 +887,7 @@ function contractDraftRow(contract, index, counterparties) {
       <label class="field-label contract-comment">Комментарий
         <input data-contract-field="comment" value="${escapeAttr(contract.comment || "")}" placeholder="Что делает" />
       </label>
-      <button type="button" class="icon-mini danger-mini contract-remove" data-remove-contract="${index}" aria-label="Убрать сотрудника">×</button>
+      <button type="button" class="icon-mini danger-mini contract-remove" data-remove-contract="${index}" aria-label="Убрать сотрудника">${iconSvg("x")}</button>
     </div>
   `;
 }
@@ -1204,7 +1258,7 @@ function renderArchivedOperations() {
                 <span class="row-subtitle">${formatDate(operation.createdAt)} · ${money(operation.amount)}</span>
               </span>
               <span class="settings-actions">
-                <button type="button" class="icon-mini" data-restore-operation="${operation.id}" aria-label="Восстановить">↥</button>
+                <button type="button" class="icon-mini" data-restore-operation="${operation.id}" aria-label="Восстановить">${iconSvg("restore")}</button>
               </span>
             </div>
           `;
@@ -1227,8 +1281,8 @@ function renderSettingsList(elementId, items) {
           </span>
           ${settingsEditMode ? `
             <span class="settings-actions">
-              <button type="button" class="icon-mini" data-edit="${mode}" data-id="${item.id}" aria-label="Редактировать">✎</button>
-              <button type="button" class="icon-mini danger-mini" data-delete="${mode}" data-id="${item.id}" aria-label="Удалить">×</button>
+              <button type="button" class="icon-mini" data-edit="${mode}" data-id="${item.id}" aria-label="Редактировать">${iconSvg("edit")}</button>
+              <button type="button" class="icon-mini danger-mini" data-delete="${mode}" data-id="${item.id}" aria-label="Удалить">${iconSvg("x")}</button>
             </span>
           ` : ""}
         </div>
@@ -1660,6 +1714,16 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function iconSvg(name) {
+  const paths = {
+    edit: '<path d="M4 20h4.5L19 9.5a2.1 2.1 0 0 0-3-3L5.5 17 4 20Z" /><path d="m14.5 8.5 3 3" />',
+    archive: '<path d="M5 7h14" /><path d="M7 7v12h10V7" /><path d="m9.5 12.5 2.5 2.5 2.5-2.5" /><path d="M12 10v5" />',
+    restore: '<path d="M7 7h6a5 5 0 1 1-4.4 7.4" /><path d="M7 7v5h5" />',
+    x: '<path d="m7 7 10 10" /><path d="m17 7-10 10" />',
+  };
+  return `<svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ""}</svg>`;
 }
 
 let toastTimer = null;

@@ -12,7 +12,7 @@
   --green: #45c779;
   --danger: #ff625c;
   --radius: 8px;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
 }
 
 * {
@@ -30,6 +30,19 @@ body {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--bg);
+  z-index: 100;
+  pointer-events: none;
 }
 
 button,
@@ -82,9 +95,35 @@ textarea {
   color: var(--text);
   display: grid;
   place-items: center;
-  font-size: 18px;
-  line-height: 1;
-  letter-spacing: 2px;
+}
+
+.dots-icon,
+.dots-icon::before,
+.dots-icon::after {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  display: block;
+}
+
+.dots-icon {
+  position: relative;
+}
+
+.dots-icon::before,
+.dots-icon::after {
+  content: "";
+  position: absolute;
+  top: 0;
+}
+
+.dots-icon::before {
+  left: -11px;
+}
+
+.dots-icon::after {
+  right: -11px;
 }
 
 .balance-label {
@@ -97,7 +136,7 @@ textarea {
   margin-top: 2px;
   font-size: 36px;
   line-height: 1;
-  font-weight: 820;
+  font-weight: 800;
   letter-spacing: 0;
 }
 
@@ -161,9 +200,9 @@ h2 {
 }
 
 .row-title {
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.15;
-  font-weight: 780;
+  font-weight: 700;
 }
 
 .row-subtitle {
@@ -175,7 +214,7 @@ h2 {
 
 .row-money {
   font-size: 18px;
-  font-weight: 780;
+  font-weight: 700;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -331,24 +370,31 @@ h2 {
   gap: 8px;
 }
 
-.attachment-grid img,
-.attachment-grid a {
+.attachment-tile {
   width: 100%;
   aspect-ratio: 1;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  object-fit: cover;
   background: var(--panel-2);
-}
-
-.attachment-grid a {
+  color: var(--text);
   display: grid;
   place-items: center;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.attachment-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.attachment-file {
   color: var(--blue);
   text-align: center;
-  padding: 8px;
   font-size: 11px;
-  text-decoration: none;
+  line-height: 1.2;
 }
 
 .operation-meta {
@@ -360,7 +406,7 @@ h2 {
 
 .operation-amount {
   font-size: 18px;
-  font-weight: 820;
+  font-weight: 750;
   white-space: nowrap;
 }
 
@@ -418,7 +464,7 @@ h2 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.2;
-  font-weight: 780;
+  font-weight: 700;
 }
 
 .field-label {
@@ -485,7 +531,7 @@ textarea:focus {
   justify-items: center;
   text-align: center;
   font-size: 12px;
-  font-weight: 820;
+  font-weight: 700;
 }
 
 .choice-card.active {
@@ -524,7 +570,7 @@ textarea:focus {
   align-items: center;
   gap: 10px;
   padding: 0 12px;
-  font-weight: 760;
+  font-weight: 650;
 }
 
 .check-line input {
@@ -546,7 +592,7 @@ textarea:focus {
   border-radius: var(--radius);
   background: var(--panel-2);
   color: var(--text);
-  font-weight: 820;
+  font-weight: 700;
 }
 
 .swap-button {
@@ -571,7 +617,6 @@ textarea:focus {
   display: grid;
   place-items: center;
   color: var(--text);
-  font-size: 25px;
 }
 
 .camera-button input {
@@ -586,10 +631,11 @@ textarea:focus {
 .save-button,
 .ghost-button,
 .small-action {
-  min-height: 46px;
+  min-height: 42px;
   border-radius: var(--radius);
   border: 1px solid transparent;
-  font-weight: 820;
+  font-weight: 700;
+  font-size: 15px;
 }
 
 .save-button {
@@ -646,14 +692,19 @@ textarea:focus {
 }
 
 .settings-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
 .settings-row {
-  min-height: 46px;
+  min-height: 48px;
   align-items: center;
-  padding: 10px;
+  padding: 8px 10px 8px 12px;
+}
+
+.settings-row .row-title {
+  font-size: 16px;
+  line-height: 1.2;
 }
 
 .filter-bar {
@@ -669,7 +720,7 @@ textarea:focus {
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
-  font-weight: 780;
+  font-weight: 700;
 }
 
 .filter-bar button {
@@ -720,8 +771,8 @@ textarea:focus {
 }
 
 .icon-mini {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-2);
@@ -729,8 +780,23 @@ textarea:focus {
   display: grid;
   place-items: center;
   padding: 0;
-  font-size: 19px;
   line-height: 1;
+}
+
+.button-icon,
+.icon-mini svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.camera-button .button-icon {
+  width: 23px;
+  height: 23px;
 }
 
 .danger-mini {
@@ -763,7 +829,7 @@ textarea:focus {
   align-content: center;
   gap: 5px;
   font-size: 11px;
-  font-weight: 780;
+  font-weight: 650;
 }
 
 .nav-button.active {
@@ -772,62 +838,13 @@ textarea:focus {
 
 .nav-icon {
   width: 28px;
-  height: 24px;
-  position: relative;
+  height: 28px;
   color: currentColor;
-}
-
-.card-icon::before,
-.journal-icon::before,
-.settings-icon::before,
-.overview-icon::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-}
-
-.card-icon::before {
-  width: 24px;
-  height: 16px;
-  border: 3px solid currentColor;
-  border-radius: 5px;
-}
-
-.journal-icon::before {
-  width: 24px;
-  height: 3px;
-  background: currentColor;
-  border-radius: 999px;
-  box-shadow: 0 -8px 0 currentColor, 0 8px 0 currentColor;
-}
-
-.settings-icon::before {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: -10px 0 0 currentColor, 10px 0 0 currentColor;
-}
-
-.overview-icon::before {
-  width: 24px;
-  height: 18px;
-  border-left: 3px solid currentColor;
-  border-bottom: 3px solid currentColor;
-  box-shadow: 8px -3px 0 -4px currentColor;
-}
-
-.overview-icon::after {
-  content: "";
-  position: absolute;
-  left: 7px;
-  bottom: 6px;
-  width: 4px;
-  height: 8px;
-  background: currentColor;
-  box-shadow: 7px -4px 0 currentColor, 14px -9px 0 currentColor;
-  border-radius: 999px 999px 0 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 dialog {
@@ -857,6 +874,67 @@ dialog::backdrop {
   gap: 8px;
 }
 
+.attachment-card {
+  width: min(430px, calc(100vw - 24px));
+  max-height: calc(100dvh - 44px - env(safe-area-inset-top));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.attachment-head {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.attachment-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.attachment-preview {
+  min-height: 180px;
+  max-height: 62dvh;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.attachment-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.attachment-preview .attachment-file {
+  padding: 24px;
+}
+
+.attachment-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.attachment-link {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -869,7 +947,7 @@ dialog::backdrop {
   border-radius: 999px;
   padding: 10px 14px;
   font-size: 13px;
-  font-weight: 780;
+  font-weight: 700;
   opacity: 0;
   pointer-events: none;
   display: flex;

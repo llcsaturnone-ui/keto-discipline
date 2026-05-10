@@ -18,7 +18,9 @@
           <div id="totalBalance" class="total-balance">0 ₽</div>
           <h1 id="screenTitle">Главная</h1>
         </div>
-        <button id="settingsTopBtn" class="header-menu" data-view="settingsView" data-title="Настройки" aria-label="Настройки">•••</button>
+        <button id="settingsTopBtn" class="header-menu" data-view="settingsView" data-title="Настройки" aria-label="Настройки">
+          <span class="dots-icon" aria-hidden="true"></span>
+        </button>
       </header>
 
       <main>
@@ -96,7 +98,10 @@
               <div class="photo-line">
                 <label class="camera-button" title="Добавить фото">
                   <input id="photoInput" name="photos" type="file" accept="image/*,.pdf" multiple />
-                  <span aria-hidden="true">⌾</span>
+                  <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8.5 7.5 10 5.5h4l1.5 2h2A2.5 2.5 0 0 1 20 10v6.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5V10a2.5 2.5 0 0 1 2.5-2.5h2Z" />
+                    <circle cx="12" cy="13" r="3.25" />
+                  </svg>
                 </label>
                 <div id="photoInfo" class="photo-info">Фото не выбрано</div>
               </div>
@@ -244,15 +249,28 @@
 
       <nav class="bottom-nav" aria-label="Разделы">
         <button class="nav-button active" data-view="accountsView" data-title="Главная">
-          <span class="nav-icon card-icon" aria-hidden="true"></span>
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="6" width="16" height="12" rx="3" />
+            <path d="M4 10h16" />
+          </svg>
           Главная
         </button>
         <button class="nav-button" data-view="operationsView" data-title="Операции">
-          <span class="nav-icon journal-icon" aria-hidden="true"></span>
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7h14" />
+            <path d="M5 12h14" />
+            <path d="M5 17h14" />
+          </svg>
           Операции
         </button>
         <button class="nav-button" data-view="overviewView" data-title="Обзор">
-          <span class="nav-icon overview-icon" aria-hidden="true"></span>
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 19V5" />
+            <path d="M4 19h16" />
+            <rect x="7" y="11" width="2.8" height="5" rx="1" />
+            <rect x="12" y="8" width="2.8" height="8" rx="1" />
+            <rect x="17" y="5" width="2.8" height="11" rx="1" />
+          </svg>
           Обзор
         </button>
       </nav>
@@ -267,6 +285,25 @@
           <button id="dialogSaveBtn" type="button" class="save-button">Сохранить</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="attachmentDialog">
+      <div class="attachment-card">
+        <div class="attachment-head">
+          <strong id="attachmentTitle">Вложение</strong>
+          <button id="attachmentCloseBtn" type="button" class="icon-mini" aria-label="Закрыть">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10" />
+              <path d="m17 7-10 10" />
+            </svg>
+          </button>
+        </div>
+        <div id="attachmentPreview" class="attachment-preview"></div>
+        <div class="attachment-actions">
+          <a id="attachmentOpenLink" class="ghost-button attachment-link" target="_blank" rel="noopener">Открыть</a>
+          <a id="attachmentDownloadLink" class="save-button attachment-link" download>Скачать</a>
+        </div>
+      </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
