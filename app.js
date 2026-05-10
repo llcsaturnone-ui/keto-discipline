@@ -76,6 +76,7 @@ let applyingRemoteState = false;
 let initialLocalOperations = [];
 let offlineQueue = loadOfflineQueue();
 let queueFlushInProgress = false;
+let settingsSnapshotLoaded = false;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
@@ -383,15 +384,16 @@ async function handleFirebaseAuthState(user) {
 function startCloudSync() {
   if (!firebaseDb || !firebaseUser) return;
   initialLocalOperations = clone(state.operations || []);
+  settingsSnapshotLoaded = false;
   cloudSyncStatus = "loading";
   cloudSyncError = "";
   renderAuthPanel();
   armCloudSyncTimer();
-  if (canManageSettings()) saveSettingsToCloud();
   settingsUnsubscribe = settingsDocRef().onSnapshot(
     (doc) => {
       if (!doc.exists) {
-        if (canManageSettings()) {
+        settingsSnapshotLoaded = true;
+        if (canManageSettings() && hasCustomSettings(state)) {
           saveSettingsToCloud();
         } else {
           cloudSyncStatus = "waiting";
@@ -399,6 +401,7 @@ function startCloudSync() {
         }
         return;
       }
+      settingsSnapshotLoaded = true;
       const remote = doc.data() || {};
       if (shouldKeepLocalSettings(remote)) {
         saveSettingsToCloud();
@@ -440,6 +443,7 @@ function stopCloudSync() {
   settingsUnsubscribe = null;
   operationsUnsubscribe = null;
   activeCloudUid = "";
+  settingsSnapshotLoaded = false;
 }
 
 function remoteList(remoteValue, currentValue, defaultValue) {
@@ -474,7 +478,12 @@ function shouldKeepLocalSettings(remote) {
 function settingsSnapshot(source = state) {
   return {
     accounts: clone(source.accounts || []),
-    projects: clone(source.projects || []),
+    projects: clone(source.projects || []).map((project) => ({
+      ...project,
+      tenderAmount: Number(project.tenderAmount || 0),
+      startDate: project.startDate || "",
+      endDate: project.endDate || "",
+    })),
     categories: clone(source.categories || []).map((category) => {
       delete category.subcategories;
       return category;
@@ -612,6 +621,8 @@ function companyDocRef() {
 
 async function saveSettingsToCloud() {
   if (!firebaseDb || !firebaseUser || !canManageSettings() || applyingRemoteState) return;
+  if (!settingsSnapshotLoaded && !hasCustomSettings(state)) return;
+  if (!hasCustomSettings(state) && !state.settingsUpdatedAt) return;
   cloudSyncStatus = "saving";
   armCloudSyncTimer();
   renderAuthPanel();
