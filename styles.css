@@ -404,6 +404,11 @@ h2 {
   line-height: 1.35;
 }
 
+.pending-sync {
+  color: var(--blue);
+  font-weight: 700;
+}
+
 .operation-amount {
   font-size: 18px;
   font-weight: 750;

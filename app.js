@@ -1,4 +1,5 @@
 const STORAGE_KEY = "standart-stroy-simple-app";
+const OFFLINE_QUEUE_KEY = "standart-stroy-offline-queue";
 const FIREBASE_SDK_VERSION = "10.12.5";
 const FIREBASE_SDK_FILES = ["firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js", "firebase-storage-compat.js"];
 
@@ -73,10 +74,13 @@ let cloudSyncTimer = null;
 let activeCloudUid = "";
 let applyingRemoteState = false;
 let initialLocalOperations = [];
+let offlineQueue = loadOfflineQueue();
+let queueFlushInProgress = false;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   initFirebaseAuth();
+  window.addEventListener("online", flushOfflineQueue);
   render();
 });
 
@@ -121,6 +125,24 @@ function loadState() {
     return normalizeState(loaded);
   } catch {
     return normalizeState(initialState());
+  }
+}
+
+function loadOfflineQueue() {
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOfflineQueue() {
+  try {
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(offlineQueue));
+  } catch (error) {
+    console.error("Не удалось сохранить очередь офлайн-действий", error);
   }
 }
 
@@ -307,6 +329,7 @@ function renderAuthPanel() {
     <div class="auth-row"><span>Доступ</span><strong>${escapeHtml(roleLabel(firebaseRole))}</strong></div>
     <div class="auth-row"><span>Компания</span><strong>${escapeHtml(config.companyId || "standart-stroy")}</strong></div>
     <div class="auth-row"><span>Синхронизация</span><strong>${escapeHtml(syncStatusLabel())}</strong></div>
+    <div class="auth-row"><span>Очередь</span><strong>${offlineQueueLabel()}</strong></div>
     <button id="authLogoutBtn" type="button" class="ghost-button">Выйти</button>
   `;
   document.getElementById("authLogoutBtn")?.addEventListener("click", signOutFirebase);
@@ -347,6 +370,7 @@ async function handleFirebaseAuthState(user) {
   if (user) {
     activeCloudUid = user.uid;
     startCloudSync();
+    flushOfflineQueue();
   } else {
     activeCloudUid = "";
     cloudSyncStatus = firebaseConfig().enabled ? "signed-out" : "local";
@@ -398,7 +422,7 @@ function startCloudSync() {
       const remoteOperations = [];
       snapshot.forEach((doc) => remoteOperations.push({ ...doc.data(), id: doc.id }));
       applyingRemoteState = true;
-      state.operations = remoteOperations;
+      state.operations = mergeRemoteOperations(remoteOperations);
       state = normalizeState(state);
       saveState();
       applyingRemoteState = false;
@@ -424,6 +448,14 @@ function remoteList(remoteValue, currentValue, defaultValue) {
   return defaultValue;
 }
 
+function mergeRemoteOperations(remoteOperations) {
+  const byId = new Map(remoteOperations.map((operation) => [operation.id, operation]));
+  offlineQueue.forEach((operation) => {
+    if (!byId.has(operation.id)) byId.set(operation.id, operation);
+  });
+  return [...byId.values()];
+}
+
 function armCloudSyncTimer() {
   clearCloudSyncTimer();
   cloudSyncTimer = setTimeout(() => {
@@ -443,7 +475,67 @@ function clearCloudSyncTimer() {
 
 function markCloudSynced() {
   clearCloudSyncTimer();
-  cloudSyncStatus = "synced";
+  cloudSyncStatus = offlineQueue.length ? "queued" : "synced";
+}
+
+function queueOperationForSync(operation, reason = "") {
+  if (!operation?.id) return;
+  const queuedOperation = clone(operation);
+  queuedOperation.syncStatus = "pending";
+  queuedOperation.syncQueuedAt = new Date().toISOString();
+  queuedOperation.syncError = reason;
+  const existingIndex = offlineQueue.findIndex((item) => item.id === queuedOperation.id);
+  if (existingIndex >= 0) offlineQueue[existingIndex] = queuedOperation;
+  else offlineQueue.push(queuedOperation);
+  markLocalOperationPending(queuedOperation.id, reason);
+  saveOfflineQueue();
+  cloudSyncStatus = "queued";
+  renderAuthPanel();
+}
+
+function markLocalOperationPending(operationId, reason = "") {
+  const operation = getById(state.operations, operationId);
+  if (!operation) return;
+  operation.syncStatus = "pending";
+  operation.syncError = reason;
+  operation.syncQueuedAt = operation.syncQueuedAt || new Date().toISOString();
+  saveState();
+}
+
+function markLocalOperationSynced(operationId) {
+  const operation = getById(state.operations, operationId);
+  if (!operation) return;
+  delete operation.syncStatus;
+  delete operation.syncError;
+  delete operation.syncQueuedAt;
+  saveState();
+}
+
+async function flushOfflineQueue() {
+  if (queueFlushInProgress || !offlineQueue.length || !firebaseDb || !firebaseUser || applyingRemoteState) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  queueFlushInProgress = true;
+  cloudSyncStatus = "saving";
+  renderAuthPanel();
+  try {
+    const remaining = [];
+    for (const operation of offlineQueue) {
+      try {
+        const prepared = await prepareOperationForCloud(operation);
+        await operationsCollectionRef().doc(prepared.id).set(prepared, { merge: true });
+        markLocalOperationSynced(prepared.id);
+      } catch (error) {
+        operation.syncError = error?.message || "Не отправлено";
+        remaining.push(operation);
+      }
+    }
+    offlineQueue = remaining;
+    saveOfflineQueue();
+    cloudSyncStatus = offlineQueue.length ? "queued" : "synced";
+    render();
+  } finally {
+    queueFlushInProgress = false;
+  }
 }
 
 function settingsDocRef() {
@@ -482,18 +574,30 @@ async function saveSettingsToCloud() {
 }
 
 async function saveOperationToCloud(operation) {
-  if (!firebaseDb || !firebaseUser || applyingRemoteState) return;
-  if (!canEditOperations() && operation.createdByUid && operation.createdByUid !== firebaseUser.uid) return;
+  if (!firebaseDb || !firebaseUser || applyingRemoteState) {
+    queueOperationForSync(operation, "Нет подключения");
+    return false;
+  }
+  if (!canEditOperations() && operation.createdByUid && operation.createdByUid !== firebaseUser.uid) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    queueOperationForSync(operation, "Нет сети");
+    return false;
+  }
   cloudSyncStatus = "saving";
   armCloudSyncTimer();
   renderAuthPanel();
   try {
     const prepared = await prepareOperationForCloud(operation);
     await operationsCollectionRef().doc(prepared.id).set(prepared, { merge: true });
+    markLocalOperationSynced(prepared.id);
     markCloudSynced();
     renderAuthPanel();
+    flushOfflineQueue();
+    return true;
   } catch (error) {
-    handleCloudSyncError(error);
+    queueOperationForSync(operation, error?.message || "Не отправлено");
+    handleCloudSyncError(error, { queued: true });
+    return false;
   }
 }
 
@@ -545,13 +649,13 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type: mime });
 }
 
-function handleCloudSyncError(error) {
+function handleCloudSyncError(error, options = {}) {
   console.error(error);
   clearCloudSyncTimer();
-  cloudSyncStatus = "error";
+  cloudSyncStatus = options.queued ? "queued" : "error";
   cloudSyncError = error?.code === "permission-denied" ? "Нет прав" : error?.message || "Ошибка синхронизации";
   renderAuthPanel();
-  notify(error?.code === "permission-denied" ? "Нет прав Firestore" : "Ошибка синхронизации");
+  notify(options.queued ? "Операция ждет отправки" : error?.code === "permission-denied" ? "Нет прав Firestore" : "Ошибка синхронизации");
 }
 
 async function resolveFirebaseRole(user) {
@@ -662,9 +766,14 @@ function syncStatusLabel() {
     loading: "Загрузка",
     synced: "Синхронизировано",
     saving: "Сохранение",
+    queued: "Есть офлайн-очередь",
     waiting: "Ждет данных",
     error: cloudSyncError || "Ошибка",
   }[cloudSyncStatus] || "Локально";
+}
+
+function offlineQueueLabel() {
+  return offlineQueue.length ? `${offlineQueue.length} ждет отправки` : "Пусто";
 }
 
 function showView(viewId, title) {
@@ -972,8 +1081,7 @@ function projectMetrics(projectId) {
 
 function projectCompleted(project, metrics) {
   const tender = Number(project.tenderAmount || 0);
-  if (tender > 0) return metrics.income >= tender;
-  return metrics.income > 0;
+  return tender > 0 && metrics.income >= tender;
 }
 
 function operationTitle(operation, sourceState = state) {
@@ -1126,6 +1234,7 @@ function operationRow({ id, title, meta, amount, amountClass, operation }) {
         <div>
           <div class="row-title">${escapeHtml(title)}</div>
           ${meta.filter(Boolean).map((line) => `<div class="operation-meta">${escapeHtml(line)}</div>`).join("")}
+          ${operation.syncStatus === "pending" ? `<div class="operation-meta pending-sync">Ждет отправки</div>` : ""}
           ${(operation.attachments || []).length ? `<div class="operation-meta">Вложения: ${operation.attachments.length}</div>` : ""}
         </div>
         <div class="operation-amount ${amountClass}">${amount}</div>
@@ -1556,10 +1665,12 @@ function handleCalculatorButton(action) {
   if (action === "=") {
     const result = evaluateAmountExpression(input.value);
     if (result === null) return notify("Проверьте выражение");
+    if (result <= 0) return notify("Сумма должна быть больше нуля");
     input.value = formatInputAmount(result);
     input.focus();
     return;
   }
+  if (action === "-" && !input.value.trim()) return;
   input.value = `${input.value}${input.value ? " " : ""}${action} `;
   input.focus();
 }
@@ -1569,7 +1680,8 @@ function formatCalculatorAmountInput(event) {
   const cleaned = String(input.value || "")
     .replace(".", ",")
     .replace(/[^\d\s,+\-*/()]/g, "");
-  input.value = /[+*/()-]/.test(cleaned.replace(/^-/, "")) ? cleaned : formatAmountText(cleaned);
+  const positiveText = cleaned.replace(/^\s*-\s*/, "");
+  input.value = /[+*/()-]/.test(positiveText) ? positiveText : formatAmountText(positiveText);
 }
 
 function evaluateAmountExpression(value) {
@@ -1673,6 +1785,7 @@ async function addOperation(source) {
   try {
     const amount = parseAmount(document.getElementById("amountInput").value);
     if (!amount) return notify("Введите сумму");
+    if (amount <= 0) return notify("Сумма должна быть больше нуля");
     const existing = editingOperationId ? getById(state.operations, editingOperationId) : null;
     const operation = buildOperation(amount);
     if (!operation) return;
