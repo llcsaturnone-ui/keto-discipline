@@ -2,7 +2,7 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#090909" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -37,6 +37,7 @@
             <h2>Журнал операций</h2>
             <button id="operationsEditBtn" class="small-action edit-toggle" type="button">Изменить</button>
           </div>
+          <div id="operationFilterBar" class="filter-bar" hidden></div>
           <div id="operationsList" class="operations-list"></div>
           <button id="addFromJournalBtn" class="floating-add" aria-label="Добавить операцию"><span aria-hidden="true">+</span></button>
         </section>
@@ -52,6 +53,14 @@
               Сумма
               <input id="amountInput" name="amount" inputmode="decimal" autocomplete="off" placeholder="0" />
             </label>
+            <div class="calc-bar" aria-label="Калькулятор суммы">
+              <button type="button" data-calc="+">+</button>
+              <button type="button" data-calc="-">−</button>
+              <button type="button" data-calc="*">×</button>
+              <button type="button" data-calc="/">÷</button>
+              <button type="button" data-calc="=">=</button>
+              <button type="button" data-calc="clear">C</button>
+            </div>
 
             <div id="standardFields" class="form-stack">
               <section>
@@ -86,7 +95,7 @@
 
               <div class="photo-line">
                 <label class="camera-button" title="Добавить фото">
-                  <input id="photoInput" name="photos" type="file" accept="image/*" multiple />
+                  <input id="photoInput" name="photos" type="file" accept="image/*,.pdf" multiple />
                   <span aria-hidden="true">⌾</span>
                 </label>
                 <div id="photoInfo" class="photo-info">Фото не выбрано</div>
@@ -98,6 +107,8 @@
                 <div class="field-title">Откуда</div>
                 <div id="transferFromCards" class="cards-grid"></div>
               </section>
+
+              <button id="swapTransferBtn" class="swap-button" type="button" aria-label="Поменять счета местами">⇅</button>
 
               <section>
                 <div class="field-title">Куда</div>
@@ -147,7 +158,7 @@
               </label>
             </div>
 
-            <button id="operationSubmitBtn" class="save-button">Добавить операцию</button>
+            <button id="operationSubmitBtn" type="button" class="save-button">Добавить операцию</button>
           </form>
         </section>
 
@@ -156,6 +167,8 @@
             <div class="field-title">Объект</div>
             <div id="overviewProjectCards" class="cards-grid"></div>
           </section>
+
+          <div id="overviewProjectSummary" class="project-summary"></div>
 
           <section class="main-section">
             <div class="section-head compact-head">
@@ -175,6 +188,17 @@
         <section id="settingsView" class="view">
           <div class="settings-toolbar">
             <button id="settingsEditBtn" class="small-action edit-toggle" type="button">Изменить</button>
+          </div>
+
+          <div class="settings-group">
+            <div class="section-head">
+              <h2>Данные</h2>
+            </div>
+            <div class="settings-tools">
+              <button id="exportDataBtn" class="small-action" type="button">Экспорт</button>
+              <button id="importJsonBtn" class="small-action" type="button">Импорт</button>
+              <input id="importJsonInput" class="import-input" type="file" accept="application/json,.json" />
+            </div>
           </div>
 
           <div class="settings-group">
@@ -235,12 +259,12 @@
     </div>
 
     <dialog id="settingsDialog">
-      <form method="dialog" id="settingsForm" class="dialog-card">
+      <form id="settingsForm" class="dialog-card">
         <h2 id="dialogTitle">Добавить</h2>
         <div id="dialogFields" class="form-stack"></div>
         <div class="dialog-actions">
           <button id="dialogCancelBtn" type="button" class="ghost-button">Отмена</button>
-          <button id="dialogSaveBtn" value="default" class="save-button">Сохранить</button>
+          <button id="dialogSaveBtn" type="button" class="save-button">Сохранить</button>
         </div>
       </form>
     </dialog>

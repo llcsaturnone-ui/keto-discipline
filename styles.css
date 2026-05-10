@@ -17,6 +17,7 @@
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -24,6 +25,11 @@ body {
   min-width: 320px;
   background: #111;
   color: var(--text);
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 button,
@@ -35,6 +41,15 @@ textarea {
 
 button {
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+input,
+select,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .app-shell {
@@ -186,21 +201,39 @@ h2 {
 }
 
 .summary-row {
-  min-height: 52px;
-  border-bottom: 1px solid var(--line);
+  min-height: 50px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: inherit;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 0 12px;
+  text-align: left;
 }
 
-.investment-row {
+.investment-row,
+.project-summary-card {
   border: 1px solid #232323;
   border-radius: var(--radius);
   background: var(--panel);
   padding: 12px;
   display: grid;
   gap: 10px;
+  color: inherit;
+  text-align: left;
+}
+
+.project-summary {
+  margin-top: 14px;
+}
+
+.project-summary-card.completed {
+  border-color: rgba(69, 199, 121, 0.45);
+  background: rgba(69, 199, 121, 0.08);
 }
 
 .worker-card {
@@ -269,6 +302,53 @@ h2 {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.operation-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.operation-details > div:not(.attachment-grid) {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operation-details strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.attachment-grid img,
+.attachment-grid a {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  object-fit: cover;
+  background: var(--panel-2);
+}
+
+.attachment-grid a {
+  display: grid;
+  place-items: center;
+  color: var(--blue);
+  text-align: center;
+  padding: 8px;
+  font-size: 11px;
+  text-decoration: none;
 }
 
 .operation-meta {
@@ -380,7 +460,7 @@ textarea:focus {
 }
 
 .cards-grid.compact {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .cards-grid.debt-grid {
@@ -388,7 +468,7 @@ textarea:focus {
 }
 
 .choice-card {
-  min-height: 62px;
+  min-height: 58px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
@@ -401,7 +481,7 @@ textarea:focus {
 }
 
 .choice-card.compact {
-  min-height: 66px;
+  min-height: 54px;
   justify-items: center;
   text-align: center;
   font-size: 12px;
@@ -419,6 +499,10 @@ textarea:focus {
   text-overflow: ellipsis;
   font-size: 14px;
   line-height: 1.15;
+}
+
+.choice-card.completed {
+  border-color: rgba(69, 199, 121, 0.45);
 }
 
 .choice-card small {
@@ -447,6 +531,28 @@ textarea:focus {
   width: 20px;
   min-height: 20px;
   accent-color: var(--accent);
+}
+
+.calc-bar {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.calc-bar button,
+.swap-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 820;
+}
+
+.swap-button {
+  width: 46px;
+  justify-self: center;
+  font-size: 22px;
 }
 
 .photo-line {
@@ -505,6 +611,20 @@ textarea:focus {
   margin-bottom: 14px;
 }
 
+.settings-tools {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.import-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .edit-toggle.active {
   border-color: rgba(240, 83, 74, 0.7);
   background: rgba(240, 83, 74, 0.16);
@@ -523,6 +643,43 @@ textarea:focus {
 
 .settings-group + .settings-group {
   margin-top: 24px;
+}
+
+.settings-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-row {
+  min-height: 46px;
+  align-items: center;
+  padding: 10px;
+}
+
+.filter-bar {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  margin-bottom: 10px;
+  padding: 0 8px 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.filter-bar button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 18px;
 }
 
 .settings-actions {
