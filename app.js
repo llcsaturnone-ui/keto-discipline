@@ -1,4 +1,6 @@
 const STORAGE_KEY = "standart-stroy-simple-app";
+const FIREBASE_SDK_VERSION = "10.12.5";
+const FIREBASE_SDK_FILES = ["firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js", "firebase-storage-compat.js"];
 
 const operationChoices = [
   ["income", "Доход"],
@@ -55,9 +57,26 @@ let operationsEditMode = false;
 let projectContractDrafts = [];
 let operationFilter = null;
 let expandedOperationId = null;
+let firebaseApp = null;
+let firebaseAuth = null;
+let firebaseDb = null;
+let firebaseStorage = null;
+let firebaseUser = null;
+let firebaseRole = "owner";
+let firebaseAuthStatus = "local";
+let firebaseAuthError = "";
+let cloudSyncStatus = "local";
+let cloudSyncError = "";
+let settingsUnsubscribe = null;
+let operationsUnsubscribe = null;
+let cloudSyncTimer = null;
+let activeCloudUid = "";
+let applyingRemoteState = false;
+let initialLocalOperations = [];
 
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
+  initFirebaseAuth();
   render();
 });
 
@@ -170,11 +189,13 @@ function bindEvents() {
   });
 
   document.getElementById("operationsEditBtn").addEventListener("click", () => {
+    if (!canEditOperations()) return notify("Редактирование доступно только владельцу");
     operationsEditMode = !operationsEditMode;
     renderOperations();
   });
 
   document.getElementById("settingsEditBtn").addEventListener("click", () => {
+    if (!canManageSettings()) return notify("Настройки может менять только владелец");
     settingsEditMode = !settingsEditMode;
     renderSettings();
   });
@@ -196,6 +217,7 @@ function bindEvents() {
 function render() {
   state = normalizeState(state);
   const steps = [
+    ["auth", renderAuthPanel],
     ["accounts", renderAccounts],
     ["investments", renderInvestments],
     ["operations", renderOperations],
@@ -210,6 +232,439 @@ function render() {
       console.error(`Не удалось обновить блок ${name}`, error);
     }
   });
+}
+
+async function initFirebaseAuth() {
+  const config = firebaseConfig();
+  if (!config.enabled) {
+    firebaseAuthStatus = "local";
+    renderAuthPanel();
+    return;
+  }
+  if (!config.apiKey || !config.projectId) {
+    firebaseAuthStatus = "missing-config";
+    firebaseAuthError = "Заполните firebase-config.js";
+    renderAuthPanel();
+    return;
+  }
+  firebaseAuthStatus = "loading";
+  renderAuthPanel();
+  try {
+    await loadFirebaseSdk();
+    firebaseApp = window.firebase.apps?.length ? window.firebase.app() : window.firebase.initializeApp(firebasePublicConfig(config));
+    firebaseAuth = window.firebase.auth();
+    firebaseDb = window.firebase.firestore ? window.firebase.firestore() : null;
+    firebaseStorage = window.firebase.storage ? window.firebase.storage() : null;
+    firebaseDb?.settings?.({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
+    cloudSyncStatus = "signed-out";
+    firebaseAuth.onAuthStateChanged(handleFirebaseAuthState);
+    firebaseAuthStatus = "ready";
+    renderAuthPanel();
+  } catch (error) {
+    console.error(error);
+    firebaseAuthStatus = "error";
+    firebaseAuthError = "Не удалось загрузить Firebase";
+    renderAuthPanel();
+  }
+}
+
+function renderAuthPanel() {
+  const panel = document.getElementById("authPanel");
+  if (!panel) return;
+  const config = firebaseConfig();
+  if (!config.enabled) {
+    panel.innerHTML = `
+      <div class="auth-row"><span>Режим</span><strong>Локально</strong></div>
+      <div class="auth-meta">Firebase пока выключен. Приложение работает с данными в этом браузере.</div>
+    `;
+    return;
+  }
+  if (firebaseAuthStatus === "missing-config" || firebaseAuthStatus === "error") {
+    panel.innerHTML = `
+      <div class="auth-row"><span>Статус</span><strong>${escapeHtml(firebaseAuthError || "Firebase не настроен")}</strong></div>
+      <div class="auth-meta">Вставьте настройки проекта в firebase-config.js, затем обновите страницу.</div>
+    `;
+    return;
+  }
+  if (firebaseAuthStatus === "loading") {
+    panel.innerHTML = `<div class="auth-meta">Подключаю Firebase...</div>`;
+    return;
+  }
+  if (!firebaseUser) {
+    panel.innerHTML = `
+      <div class="auth-form">
+        <label class="field-label">Email<input id="authEmailInput" type="email" autocomplete="username" placeholder="name@example.com" /></label>
+        <label class="field-label">Пароль<input id="authPasswordInput" type="password" autocomplete="current-password" placeholder="Пароль" /></label>
+        <button id="authLoginBtn" type="button" class="save-button">Войти</button>
+      </div>
+      <div class="auth-meta">Без входа онлайн-режим закрыт. Локальная версия остается доступной только пока Firebase выключен.</div>
+    `;
+    document.getElementById("authLoginBtn")?.addEventListener("click", signInFirebase);
+    return;
+  }
+  panel.innerHTML = `
+    <div class="auth-row"><span>Email</span><strong>${escapeHtml(firebaseUser.email || "Аккаунт")}</strong></div>
+    <div class="auth-row"><span>Доступ</span><strong>${escapeHtml(roleLabel(firebaseRole))}</strong></div>
+    <div class="auth-row"><span>Компания</span><strong>${escapeHtml(config.companyId || "standart-stroy")}</strong></div>
+    <div class="auth-row"><span>Синхронизация</span><strong>${escapeHtml(syncStatusLabel())}</strong></div>
+    <button id="authLogoutBtn" type="button" class="ghost-button">Выйти</button>
+  `;
+  document.getElementById("authLogoutBtn")?.addEventListener("click", signOutFirebase);
+}
+
+async function signInFirebase() {
+  if (!firebaseAuth) return notify("Firebase еще не готов");
+  const email = document.getElementById("authEmailInput")?.value.trim();
+  const password = document.getElementById("authPasswordInput")?.value;
+  if (!email || !password) return notify("Введите email и пароль");
+  try {
+    const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
+    await handleFirebaseAuthState(credential.user);
+    notify("Вход выполнен");
+  } catch (error) {
+    console.error(error);
+    notify("Не удалось войти");
+  }
+}
+
+async function signOutFirebase() {
+  if (!firebaseAuth) return;
+  await firebaseAuth.signOut();
+  notify("Вы вышли");
+}
+
+async function handleFirebaseAuthState(user) {
+  const nextUid = user?.uid || "";
+  if (nextUid && nextUid === activeCloudUid && firebaseUser?.uid === nextUid) {
+    render();
+    return;
+  }
+  stopCloudSync();
+  firebaseUser = user || null;
+  firebaseRole = user ? await resolveFirebaseRole(user) : "guest";
+  if (!canManageSettings()) settingsEditMode = false;
+  if (!canEditOperations()) operationsEditMode = false;
+  if (user) {
+    activeCloudUid = user.uid;
+    startCloudSync();
+  } else {
+    activeCloudUid = "";
+    cloudSyncStatus = firebaseConfig().enabled ? "signed-out" : "local";
+  }
+  render();
+}
+
+function startCloudSync() {
+  if (!firebaseDb || !firebaseUser) return;
+  initialLocalOperations = clone(state.operations || []);
+  cloudSyncStatus = "loading";
+  cloudSyncError = "";
+  renderAuthPanel();
+  armCloudSyncTimer();
+  if (canManageSettings()) saveSettingsToCloud();
+  settingsUnsubscribe = settingsDocRef().onSnapshot(
+    (doc) => {
+      if (!doc.exists) {
+        if (canManageSettings()) {
+          saveSettingsToCloud();
+        } else {
+          cloudSyncStatus = "waiting";
+          renderAuthPanel();
+        }
+        return;
+      }
+      const remote = doc.data() || {};
+      applyingRemoteState = true;
+      state.accounts = remoteList(remote.accounts, state.accounts, initialState().accounts);
+      state.projects = remoteList(remote.projects, state.projects, initialState().projects);
+      state.categories = remoteList(remote.categories, state.categories, initialState().categories);
+      state.counterparties = remoteList(remote.counterparties, state.counterparties, initialState().counterparties);
+      state.workerContracts = Array.isArray(remote.workerContracts) ? remote.workerContracts : state.workerContracts || [];
+      state = normalizeState(state);
+      saveState();
+      applyingRemoteState = false;
+      markCloudSynced();
+      render();
+    },
+    (error) => handleCloudSyncError(error)
+  );
+  operationsUnsubscribe = operationsCollectionRef().onSnapshot(
+    (snapshot) => {
+      if (snapshot.empty && canManageSettings() && initialLocalOperations.length) {
+        saveOperationsToCloud(initialLocalOperations);
+        initialLocalOperations = [];
+        return;
+      }
+      const remoteOperations = [];
+      snapshot.forEach((doc) => remoteOperations.push({ ...doc.data(), id: doc.id }));
+      applyingRemoteState = true;
+      state.operations = remoteOperations;
+      state = normalizeState(state);
+      saveState();
+      applyingRemoteState = false;
+      markCloudSynced();
+      render();
+    },
+    (error) => handleCloudSyncError(error)
+  );
+}
+
+function stopCloudSync() {
+  clearCloudSyncTimer();
+  settingsUnsubscribe?.();
+  operationsUnsubscribe?.();
+  settingsUnsubscribe = null;
+  operationsUnsubscribe = null;
+  activeCloudUid = "";
+}
+
+function remoteList(remoteValue, currentValue, defaultValue) {
+  if (Array.isArray(remoteValue) && remoteValue.length) return remoteValue;
+  if (Array.isArray(currentValue) && currentValue.length) return currentValue;
+  return defaultValue;
+}
+
+function armCloudSyncTimer() {
+  clearCloudSyncTimer();
+  cloudSyncTimer = setTimeout(() => {
+    if (cloudSyncStatus === "loading" || cloudSyncStatus === "saving") {
+      cloudSyncStatus = "error";
+      cloudSyncError = "Firestore не отвечает";
+      renderAuthPanel();
+      notify("Проверьте Firestore Database и Rules");
+    }
+  }, 12000);
+}
+
+function clearCloudSyncTimer() {
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+}
+
+function markCloudSynced() {
+  clearCloudSyncTimer();
+  cloudSyncStatus = "synced";
+}
+
+function settingsDocRef() {
+  return companyDocRef().collection("app").doc("settings");
+}
+
+function operationsCollectionRef() {
+  return companyDocRef().collection("operations");
+}
+
+function companyDocRef() {
+  return firebaseDb.collection("companies").doc(firebaseConfig().companyId || "standart-stroy");
+}
+
+async function saveSettingsToCloud() {
+  if (!firebaseDb || !firebaseUser || !canManageSettings() || applyingRemoteState) return;
+  cloudSyncStatus = "saving";
+  armCloudSyncTimer();
+  renderAuthPanel();
+  try {
+    await settingsDocRef().set({
+      accounts: clone(state.accounts || []),
+      projects: clone(state.projects || []),
+      categories: clone(state.categories || []),
+      counterparties: clone(state.counterparties || []),
+      workerContracts: clone(state.workerContracts || []),
+      updatedAt: new Date().toISOString(),
+      updatedByUid: firebaseUser.uid,
+      updatedByEmail: firebaseUser.email || "",
+    }, { merge: true });
+    markCloudSynced();
+    renderAuthPanel();
+  } catch (error) {
+    handleCloudSyncError(error);
+  }
+}
+
+async function saveOperationToCloud(operation) {
+  if (!firebaseDb || !firebaseUser || applyingRemoteState) return;
+  if (!canEditOperations() && operation.createdByUid && operation.createdByUid !== firebaseUser.uid) return;
+  cloudSyncStatus = "saving";
+  armCloudSyncTimer();
+  renderAuthPanel();
+  try {
+    const prepared = await prepareOperationForCloud(operation);
+    await operationsCollectionRef().doc(prepared.id).set(prepared, { merge: true });
+    markCloudSynced();
+    renderAuthPanel();
+  } catch (error) {
+    handleCloudSyncError(error);
+  }
+}
+
+async function saveOperationsToCloud(operations) {
+  if (!firebaseDb || !firebaseUser || !canManageSettings() || applyingRemoteState) return;
+  cloudSyncStatus = "saving";
+  armCloudSyncTimer();
+  renderAuthPanel();
+  try {
+    for (const operation of operations) {
+      await saveOperationToCloud(operation);
+    }
+    markCloudSynced();
+    renderAuthPanel();
+  } catch (error) {
+    handleCloudSyncError(error);
+  }
+}
+
+async function prepareOperationForCloud(operation) {
+  const prepared = clone(operation);
+  prepared.attachments = await Promise.all((prepared.attachments || []).map((file) => uploadAttachmentForCloud(prepared, file)));
+  prepared.updatedAt = new Date().toISOString();
+  prepared.updatedByUid = firebaseUser?.uid || "";
+  prepared.updatedByEmail = firebaseUser?.email || "";
+  return prepared;
+}
+
+async function uploadAttachmentForCloud(operation, file) {
+  const prepared = { ...file };
+  if (firebaseConfig().storageEnabled && firebaseStorage && prepared.dataUrl && !prepared.downloadURL) {
+    const blob = dataUrlToBlob(prepared.dataUrl);
+    const path = prepared.storagePath || `companies/${firebaseConfig().companyId || "standart-stroy"}/operations/${operation.id}/${prepared.id}-${sanitizeFileName(prepared.name || "file")}`;
+    const ref = firebaseStorage.ref().child(path);
+    await ref.put(blob, { contentType: prepared.type || blob.type || "application/octet-stream" });
+    prepared.storagePath = path;
+    prepared.downloadURL = await ref.getDownloadURL();
+  }
+  delete prepared.dataUrl;
+  return prepared;
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [meta, content] = String(dataUrl || "").split(",");
+  const mime = meta.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
+  const binary = atob(content || "");
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: mime });
+}
+
+function handleCloudSyncError(error) {
+  console.error(error);
+  clearCloudSyncTimer();
+  cloudSyncStatus = "error";
+  cloudSyncError = error?.code === "permission-denied" ? "Нет прав" : error?.message || "Ошибка синхронизации";
+  renderAuthPanel();
+  notify(error?.code === "permission-denied" ? "Нет прав Firestore" : "Ошибка синхронизации");
+}
+
+async function resolveFirebaseRole(user) {
+  const config = firebaseConfig();
+  const configRole = roleFromEmail(user.email, config);
+  if (configRole) return configRole;
+  if (firebaseDb && config.companyId) {
+    try {
+      const doc = await firebaseDb
+        .collection("companies")
+        .doc(config.companyId)
+        .collection("users")
+        .doc(user.uid)
+        .get();
+      const role = doc.exists ? doc.data()?.role : "";
+      if (role === "owner" || role === "investor") return role;
+    } catch (error) {
+      console.warn("Не удалось получить роль пользователя", error);
+    }
+  }
+  return configRole || "investor";
+}
+
+function roleFromEmail(email, config = firebaseConfig()) {
+  const normalized = String(email || "").toLowerCase();
+  if (!normalized) return "";
+  if ((config.ownerEmails || []).map((item) => String(item).toLowerCase()).includes(normalized)) return "owner";
+  if ((config.investorEmails || []).map((item) => String(item).toLowerCase()).includes(normalized)) return "investor";
+  return "";
+}
+
+function firebaseConfig() {
+  return window.STANDART_STROY_FIREBASE_CONFIG || { enabled: false };
+}
+
+function firebasePublicConfig(config = firebaseConfig()) {
+  return {
+    apiKey: config.apiKey,
+    authDomain: config.authDomain,
+    projectId: config.projectId,
+    storageBucket: config.storageBucket,
+    messagingSenderId: config.messagingSenderId,
+    appId: config.appId,
+  };
+}
+
+async function loadFirebaseSdk() {
+  if (window.firebase?.auth) return;
+  for (const file of FIREBASE_SDK_FILES) {
+    await loadScript(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/${file}`);
+  }
+}
+
+function loadScript(src) {
+  if ([...document.scripts].some((script) => script.src === src)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
+function currentRole() {
+  if (!firebaseConfig().enabled) return "owner";
+  if (!firebaseUser) return "guest";
+  return firebaseRole || "investor";
+}
+
+function roleLabel(role) {
+  return {
+    owner: "Владелец",
+    investor: "Инвестор",
+    guest: "Нет входа",
+  }[role] || "Инвестор";
+}
+
+function canManageSettings() {
+  return currentRole() === "owner";
+}
+
+function canEditOperations() {
+  return currentRole() === "owner";
+}
+
+function canAddOperations() {
+  return currentRole() === "owner" || currentRole() === "investor";
+}
+
+function operationAuthorFields() {
+  if (!firebaseUser) return {};
+  return {
+    createdByUid: firebaseUser.uid,
+    createdByEmail: firebaseUser.email || "",
+    createdByRole: currentRole(),
+  };
+}
+
+function requiresFirebaseSignIn() {
+  return firebaseConfig().enabled && !firebaseUser;
+}
+
+function syncStatusLabel() {
+  return {
+    local: "Локально",
+    "signed-out": "Нужен вход",
+    loading: "Загрузка",
+    synced: "Синхронизировано",
+    saving: "Сохранение",
+    waiting: "Ждет данных",
+    error: cloudSyncError || "Ошибка",
+  }[cloudSyncStatus] || "Локально";
 }
 
 function showView(viewId, title) {
@@ -231,6 +686,12 @@ function showView(viewId, title) {
 }
 
 function renderAccounts() {
+  if (requiresFirebaseSignIn()) {
+    document.getElementById("totalBalance").textContent = "Вход";
+    document.getElementById("accountsList").innerHTML = `<div class="empty-state">Войдите в аккаунт, чтобы открыть данные компании</div>`;
+    document.getElementById("investmentsList").innerHTML = "";
+    return;
+  }
   const balances = calculateBalances();
   const frozenAmounts = calculateFrozenAmounts();
   const visibleAccounts = state.accounts.filter((account) => !isPersonalAccount(account));
@@ -254,6 +715,7 @@ function renderAccounts() {
 }
 
 function renderInvestments() {
+  if (requiresFirebaseSignIn()) return;
   const investments = calculateInvestments();
   const investors = state.accounts.filter(isPersonalAccount);
   document.getElementById("investmentsList").innerHTML = investors
@@ -292,10 +754,19 @@ function bindAccountFilters() {
 
 function renderOperations() {
   const list = document.getElementById("operationsList");
+  document.getElementById("addFromJournalBtn").hidden = !canAddOperations();
+  if (requiresFirebaseSignIn()) {
+    document.getElementById("operationsEditBtn").hidden = true;
+    document.getElementById("operationFilterBar").hidden = true;
+    list.innerHTML = `<div class="empty-state">Войдите в аккаунт, чтобы открыть журнал операций</div>`;
+    return;
+  }
   const operations = filteredOperations();
   const editButton = document.getElementById("operationsEditBtn");
+  if (!canEditOperations()) operationsEditMode = false;
   editButton.textContent = operationsEditMode ? "Готово" : "Изменить";
   editButton.classList.toggle("active", operationsEditMode);
+  editButton.hidden = !canEditOperations();
   renderOperationFilterBar();
   if (!operations.length) {
     list.innerHTML = `<div class="empty-state">Операций пока нет</div>`;
@@ -367,6 +838,13 @@ function bindOperationActions() {
 }
 
 function renderOverview() {
+  if (requiresFirebaseSignIn()) {
+    document.getElementById("overviewProjectCards").innerHTML = `<div class="empty-state">Войдите в аккаунт, чтобы открыть обзор</div>`;
+    document.getElementById("overviewProjectSummary").innerHTML = "";
+    document.getElementById("overviewCategoryList").innerHTML = "";
+    document.getElementById("overviewWorkerList").innerHTML = "";
+    return;
+  }
   syncOverviewProject();
   renderOverviewProjects();
   renderOverviewProjectSummary();
@@ -711,10 +1189,11 @@ function operationDetails(operation) {
 }
 
 function renderAttachment(file) {
-  if (file.type?.startsWith("image/")) {
+  const url = attachmentUrl(file);
+  if (file.type?.startsWith("image/") && url) {
     return `
       <button type="button" class="attachment-tile" data-open-attachment="${escapeAttr(file.id)}" aria-label="Открыть ${escapeAttr(file.name || "фото")}">
-        <img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(file.name || "Фото")}" />
+        <img src="${escapeAttr(url)}" alt="${escapeAttr(file.name || "Фото")}" />
       </button>
     `;
   }
@@ -751,6 +1230,8 @@ function openAttachmentViewer(fileId) {
   const match = findAttachment(fileId);
   if (!match) return notify("Вложение не найдено");
   const { file, operation } = match;
+  const url = attachmentUrl(file);
+  if (!url) return notify("Файл еще не синхронизирован");
   const title = file.name || "Вложение";
   const dialog = document.getElementById("attachmentDialog");
   const preview = document.getElementById("attachmentPreview");
@@ -759,17 +1240,21 @@ function openAttachmentViewer(fileId) {
   const downloadLink = document.getElementById("attachmentDownloadLink");
   document.getElementById("attachmentTitle").textContent = title;
   preview.innerHTML = file.type?.startsWith("image/")
-    ? `<img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(title)}" />`
+    ? `<img src="${escapeAttr(url)}" alt="${escapeAttr(title)}" />`
     : `<div class="attachment-file">${escapeHtml(title)}</div>`;
   info.innerHTML = renderAttachmentOperationInfo(operation);
-  openLink.href = file.dataUrl;
-  downloadLink.href = file.dataUrl;
+  openLink.href = url;
+  downloadLink.href = url;
   downloadLink.download = attachmentDownloadName(file, operation);
   if (typeof dialog.showModal === "function") {
     if (!dialog.open) dialog.showModal();
   } else {
     dialog.setAttribute("open", "");
   }
+}
+
+function attachmentUrl(file) {
+  return file?.dataUrl || file?.downloadURL || "";
 }
 
 function closeAttachmentViewer() {
@@ -787,6 +1272,7 @@ function findAttachment(fileId) {
 }
 
 function renderAddForm() {
+  if (requiresFirebaseSignIn()) return;
   syncDraftWithState();
   renderTypeCards();
   renderFormMode();
@@ -1105,6 +1591,7 @@ function swapTransferAccounts() {
 }
 
 function startNewOperation() {
+  if (!canAddOperations()) return notify("Войдите в аккаунт");
   editingOperationId = null;
   document.getElementById("operationForm").reset();
   draft.type = "expense";
@@ -1116,6 +1603,7 @@ function startNewOperation() {
 }
 
 function openOperationEditor(id) {
+  if (!canEditOperations()) return notify("Редактирование доступно только владельцу");
   const operation = getById(state.operations, id);
   if (!operation) return;
   editingOperationId = id;
@@ -1157,11 +1645,13 @@ function fillOperationForm(operation) {
 }
 
 function archiveOperation(id) {
+  if (!canEditOperations()) return notify("Архив доступен только владельцу");
   const operation = getById(state.operations, id);
   if (!operation) return;
   if (!confirm("Перенести операцию в архив?")) return;
   operation.archived = true;
   saveState();
+  saveOperationToCloud(operation);
   render();
   notify("Операция в архиве");
 }
@@ -1171,12 +1661,14 @@ function restoreOperation(id) {
   if (!operation) return;
   operation.archived = false;
   saveState();
+  saveOperationToCloud(operation);
   render();
   notify("Операция восстановлена");
 }
 
-function addOperation(source) {
+async function addOperation(source) {
   source?.preventDefault?.();
+  if (!canAddOperations()) return notify("Войдите в аккаунт");
   const form = source?.reset ? source : document.getElementById("operationForm");
   try {
     const amount = parseAmount(document.getElementById("amountInput").value);
@@ -1184,17 +1676,20 @@ function addOperation(source) {
     const existing = editingOperationId ? getById(state.operations, editingOperationId) : null;
     const operation = buildOperation(amount);
     if (!operation) return;
+    let savedOperation = operation;
     if (existing) {
       if (draft.type !== "transfer" && draft.type !== "debt") operation.createdAt = existing.createdAt;
       operation.id = existing.id;
       operation.archived = false;
       enrichOperationAttachments(operation);
       Object.assign(existing, operation);
+      savedOperation = existing;
     } else {
       enrichOperationAttachments(operation);
       state.operations.unshift(operation);
     }
     const saved = saveState();
+    await saveOperationToCloud(savedOperation);
     resetOperationForm(form);
     render();
     showView("operationsView", "Операции");
@@ -1227,6 +1722,7 @@ function buildStandardOperation(amount) {
     photoCount: draft.photoCount,
     attachments: clone(draft.attachments || []),
     createdAt: new Date().toISOString(),
+    ...operationAuthorFields(),
   };
 }
 
@@ -1242,6 +1738,7 @@ function buildTransferOperation(amount) {
     vat: document.getElementById("transferVatInput").checked,
     comment: document.getElementById("transferCommentInput").value.trim(),
     createdAt: isoFromLocalInput(document.getElementById("transferDateInput").value),
+    ...operationAuthorFields(),
   };
 }
 
@@ -1255,6 +1752,7 @@ function buildDebtOperation(amount) {
     counterpartyId: document.getElementById("debtCounterpartySelect").value,
     comment: document.getElementById("debtCommentInput").value.trim(),
     createdAt: isoFromLocalInput(document.getElementById("debtDateInput").value),
+    ...operationAuthorFields(),
   };
 }
 
@@ -1328,11 +1826,21 @@ function calculateInvestments() {
 
 function renderSettings() {
   const editButton = document.getElementById("settingsEditBtn");
+  if (!canManageSettings()) settingsEditMode = false;
   editButton.textContent = settingsEditMode ? "Готово" : "Изменить";
   editButton.classList.toggle("active", settingsEditMode);
+  editButton.hidden = !canManageSettings();
+  document.getElementById("exportDataBtn").hidden = requiresFirebaseSignIn();
+  document.getElementById("importJsonBtn").hidden = !canManageSettings();
   document.querySelectorAll("#settingsView [data-add]").forEach((button) => {
-    button.hidden = !settingsEditMode;
+    button.hidden = !settingsEditMode || !canManageSettings();
   });
+  if (requiresFirebaseSignIn()) {
+    ["settingsAccounts", "settingsInvestors", "settingsProjects", "settingsCategories", "settingsCounterparties", "settingsArchivedOperations"].forEach((id) => {
+      document.getElementById(id).innerHTML = "";
+    });
+    return;
+  }
   renderSettingsList("settingsAccounts");
   renderSettingsList("settingsInvestors");
   renderSettingsList("settingsProjects");
@@ -1410,6 +1918,7 @@ function settingsModeByElementId(elementId) {
 }
 
 function openSettingsDialog(mode, itemId = null) {
+  if (!canManageSettings()) return notify("Настройки может менять только владелец");
   dialogMode = mode;
   editingItem = itemId ? getSettingsCollection(mode).find((item) => item.id === itemId) : null;
   const titleMap = {
@@ -1469,6 +1978,7 @@ function dialogFields(mode, item = null) {
 }
 
 function saveDialogItem(form) {
+  if (!canManageSettings()) return notify("Сохранение настроек доступно только владельцу");
   try {
     const data = new FormData(form);
     const collection = getSettingsCollection(dialogMode);
@@ -1521,6 +2031,7 @@ function saveDialogItem(form) {
 
 function saveAfterDialog(form) {
   saveState();
+  saveSettingsToCloud();
   closeSettingsDialog();
   form.reset();
   render();
@@ -1528,6 +2039,7 @@ function saveAfterDialog(form) {
 }
 
 function deleteSettingsItem(mode, id) {
+  if (!canManageSettings()) return notify("Удаление доступно только владельцу");
   if (!confirm("Удалить запись?")) return;
   const collection = getSettingsCollection(mode);
   if (!collection) return notify("Не выбран раздел");
@@ -1545,11 +2057,13 @@ function deleteSettingsItem(mode, id) {
   if (mode === "counterparty") state.workerContracts = state.workerContracts.filter((contract) => contract.counterpartyId !== id);
   if (mode === "account" || mode === "investor") groupAccountTypes(state);
   saveState();
+  saveSettingsToCloud();
   render();
   notify("Удалено");
 }
 
 function moveSettingsItem(mode, id, direction) {
+  if (!canManageSettings()) return notify("Сортировка доступна только владельцу");
   if (!settingsEditMode || !direction) return;
   const items = settingsItemsForMode(mode);
   const currentVisibleIndex = items.findIndex((item) => item.id === id);
@@ -1562,6 +2076,7 @@ function moveSettingsItem(mode, id, direction) {
   [collection[currentIndex], collection[targetIndex]] = [collection[targetIndex], collection[currentIndex]];
   if (mode === "account" || mode === "investor") groupAccountTypes(state);
   saveState();
+  saveSettingsToCloud();
   render();
 }
 
@@ -1736,6 +2251,10 @@ function downloadFile(filename, content, type) {
 }
 
 async function importJson(event) {
+  if (!canManageSettings()) {
+    event.target.value = "";
+    return notify("Импорт доступен только владельцу");
+  }
   const file = event.target.files[0];
   if (!file) return;
   try {
@@ -1743,6 +2262,8 @@ async function importJson(event) {
     if (!imported.accounts || !imported.operations) throw new Error("bad backup");
     state = normalizeState(imported);
     saveState();
+    saveSettingsToCloud();
+    saveOperationsToCloud(state.operations);
     render();
     notify("Импортировано");
   } catch (error) {
