@@ -518,6 +518,15 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.choice-group-title {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 750;
+}
+
 .choice-card {
   min-height: 58px;
   border: 1px solid var(--line);

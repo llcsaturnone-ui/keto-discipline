@@ -153,12 +153,14 @@ function normalizeState(data) {
   if (!Array.isArray(data.counterparties)) data.counterparties = initialState().counterparties;
   if (!Array.isArray(data.workerContracts)) data.workerContracts = [];
   if (!Array.isArray(data.operations)) data.operations = [];
+  if (typeof data.settingsUpdatedAt !== "string") data.settingsUpdatedAt = "";
   data.categories.forEach((category) => delete category.subcategories);
   data.projects.forEach((project) => {
     if (project.tenderAmount === undefined) project.tenderAmount = 0;
   });
   data.operations.forEach((operation) => {
     if (!Array.isArray(operation.attachments)) operation.attachments = [];
+    if (!operation.createdAtMs) operation.createdAtMs = Date.parse(operation.createdAt) || 0;
     operation.attachments.forEach((file) => {
       if (!file.id) file.id = createId("file");
     });
@@ -398,15 +400,13 @@ function startCloudSync() {
         return;
       }
       const remote = doc.data() || {};
-      applyingRemoteState = true;
-      state.accounts = remoteList(remote.accounts, state.accounts, initialState().accounts);
-      state.projects = remoteList(remote.projects, state.projects, initialState().projects);
-      state.categories = remoteList(remote.categories, state.categories, initialState().categories);
-      state.counterparties = remoteList(remote.counterparties, state.counterparties, initialState().counterparties);
-      state.workerContracts = Array.isArray(remote.workerContracts) ? remote.workerContracts : state.workerContracts || [];
-      state = normalizeState(state);
-      saveState();
-      applyingRemoteState = false;
+      if (shouldKeepLocalSettings(remote)) {
+        saveSettingsToCloud();
+        markCloudSynced();
+        renderAuthPanel();
+        return;
+      }
+      applyRemoteSettings(remote);
       markCloudSynced();
       render();
     },
@@ -446,6 +446,66 @@ function remoteList(remoteValue, currentValue, defaultValue) {
   if (Array.isArray(remoteValue) && remoteValue.length) return remoteValue;
   if (Array.isArray(currentValue) && currentValue.length) return currentValue;
   return defaultValue;
+}
+
+function applyRemoteSettings(remote) {
+  applyingRemoteState = true;
+  state.accounts = remoteList(remote.accounts, state.accounts, initialState().accounts);
+  state.projects = remoteList(remote.projects, state.projects, initialState().projects);
+  state.categories = remoteList(remote.categories, state.categories, initialState().categories);
+  state.counterparties = remoteList(remote.counterparties, state.counterparties, initialState().counterparties);
+  state.workerContracts = Array.isArray(remote.workerContracts) ? remote.workerContracts : state.workerContracts || [];
+  state.settingsUpdatedAt = remote.updatedAt || state.settingsUpdatedAt || "";
+  state = normalizeState(state);
+  saveState();
+  applyingRemoteState = false;
+}
+
+function shouldKeepLocalSettings(remote) {
+  const remoteSnapshot = settingsSnapshot(remote);
+  const localSnapshot = settingsSnapshot(state);
+  if (settingsEqual(remoteSnapshot, localSnapshot)) return false;
+  const localUpdated = Date.parse(state.settingsUpdatedAt || "") || 0;
+  const remoteUpdated = Date.parse(remote.updatedAt || "") || 0;
+  if (localUpdated && (!remoteUpdated || localUpdated > remoteUpdated)) return true;
+  return hasCustomSettings(state) && isDefaultSettingsSnapshot(remoteSnapshot);
+}
+
+function settingsSnapshot(source = state) {
+  return {
+    accounts: clone(source.accounts || []),
+    projects: clone(source.projects || []),
+    categories: clone(source.categories || []).map((category) => {
+      delete category.subcategories;
+      return category;
+    }),
+    counterparties: clone(source.counterparties || []),
+    workerContracts: clone(source.workerContracts || []),
+  };
+}
+
+function defaultSettingsSnapshot() {
+  const defaults = initialState();
+  defaults.projects.forEach((project) => {
+    if (project.tenderAmount === undefined) project.tenderAmount = 0;
+  });
+  return settingsSnapshot(defaults);
+}
+
+function settingsEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isDefaultSettingsSnapshot(snapshot) {
+  return settingsEqual(snapshot, defaultSettingsSnapshot());
+}
+
+function hasCustomSettings(source = state) {
+  return !isDefaultSettingsSnapshot(settingsSnapshot(source));
+}
+
+function markSettingsChanged() {
+  state.settingsUpdatedAt = new Date().toISOString();
 }
 
 function mergeRemoteOperations(remoteOperations) {
@@ -555,6 +615,9 @@ async function saveSettingsToCloud() {
   cloudSyncStatus = "saving";
   armCloudSyncTimer();
   renderAuthPanel();
+  const updatedAt = state.settingsUpdatedAt || new Date().toISOString();
+  state.settingsUpdatedAt = updatedAt;
+  saveState();
   try {
     await settingsDocRef().set({
       accounts: clone(state.accounts || []),
@@ -562,7 +625,7 @@ async function saveSettingsToCloud() {
       categories: clone(state.categories || []),
       counterparties: clone(state.counterparties || []),
       workerContracts: clone(state.workerContracts || []),
-      updatedAt: new Date().toISOString(),
+      updatedAt,
       updatedByUid: firebaseUser.uid,
       updatedByEmail: firebaseUser.email || "",
     }, { merge: true });
@@ -883,7 +946,7 @@ function renderOperations() {
   }
   list.innerHTML = operations
     .slice()
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .sort(compareOperationsByTime)
     .map(renderOperationRow)
     .join("");
   bindOperationActions();
@@ -893,6 +956,17 @@ function filteredOperations() {
   const operations = activeOperations();
   if (!operationFilter) return operations;
   return operations.filter((operation) => matchesOperationFilter(operation, operationFilter));
+}
+
+function compareOperationsByTime(a, b) {
+  const left = operationSortValue(a);
+  const right = operationSortValue(b);
+  if (right !== left) return right - left;
+  return String(b.id || "").localeCompare(String(a.id || ""));
+}
+
+function operationSortValue(operation) {
+  return Number(operation.createdAtMs || 0) || Date.parse(operation.createdAt) || 0;
 }
 
 function matchesOperationFilter(operation, filter) {
@@ -1430,9 +1504,7 @@ function renderFormMode() {
 }
 
 function renderAccountCards() {
-  document.getElementById("accountCards").innerHTML = state.accounts
-    .map((account) => choiceCard(account.id, account.name, "", draft.accountId === account.id, "account"))
-    .join("");
+  document.getElementById("accountCards").innerHTML = accountChoiceGroupsHtml(state.accounts, draft.accountId, "account");
   document.querySelectorAll("[data-account]").forEach((button) => {
     button.addEventListener("click", () => {
       draft.accountId = button.dataset.account;
@@ -1497,13 +1569,41 @@ function renderDebtCards() {
 }
 
 function renderAccountChoiceCards(containerId, dataName, selectedId, onSelect, accounts = state.accounts) {
-  document.getElementById(containerId).innerHTML = state.accounts
-    .filter((account) => accounts.some((option) => option.id === account.id))
-    .map((account) => choiceCard(account.id, account.name, "", selectedId === account.id, dataName))
-    .join("");
+  const allowedIds = new Set(accounts.map((account) => account.id));
+  const visibleAccounts = state.accounts.filter((account) => allowedIds.has(account.id));
+  document.getElementById(containerId).innerHTML = accountChoiceGroupsHtml(visibleAccounts, selectedId, dataName);
   document.querySelectorAll(`[data-${dataName}]`).forEach((button) => {
     button.addEventListener("click", () => onSelect(button.getAttribute(`data-${dataName}`)));
   });
+}
+
+function accountChoiceGroupsHtml(accounts, selectedId, dataName) {
+  const balances = calculateBalances();
+  const frozenAmounts = calculateFrozenAmounts();
+  const regularAccounts = accounts.filter((account) => !isPersonalAccount(account));
+  const investors = accounts.filter(isPersonalAccount);
+  return [
+    accountChoiceGroupHtml("Счета", regularAccounts, selectedId, dataName, balances, frozenAmounts),
+    accountChoiceGroupHtml("Инвесторы", investors, selectedId, dataName, balances, frozenAmounts),
+  ].filter(Boolean).join("");
+}
+
+function accountChoiceGroupHtml(title, accounts, selectedId, dataName, balances, frozenAmounts) {
+  if (!accounts.length) return "";
+  return `
+    <div class="choice-group-title">${escapeHtml(title)}</div>
+    ${accounts.map((account) => {
+      const subtitle = isPersonalAccount(account) ? "" : accountChoiceSubtitle(account, balances, frozenAmounts);
+      return choiceCard(account.id, account.name, subtitle, selectedId === account.id, dataName);
+    }).join("")}
+  `;
+}
+
+function accountChoiceSubtitle(account, balances, frozenAmounts) {
+  const balance = visibleBalance(account, balances, frozenAmounts);
+  const frozen = frozenAmounts[account.id] || 0;
+  if (isSpecialAccount(account) && frozen) return `${money(balance)} · ${money(frozen)}`;
+  return money(balance);
 }
 
 function choiceCard(id, title, subtitle, active, dataName, extraClass = "") {
@@ -1783,15 +1883,17 @@ async function addOperation(source) {
   if (!canAddOperations()) return notify("Войдите в аккаунт");
   const form = source?.reset ? source : document.getElementById("operationForm");
   try {
+    const createdAtMs = Date.now();
     const amount = parseAmount(document.getElementById("amountInput").value);
     if (!amount) return notify("Введите сумму");
     if (amount <= 0) return notify("Сумма должна быть больше нуля");
     const existing = editingOperationId ? getById(state.operations, editingOperationId) : null;
-    const operation = buildOperation(amount);
+    const operation = buildOperation(amount, createdAtMs);
     if (!operation) return;
     let savedOperation = operation;
     if (existing) {
       if (draft.type !== "transfer" && draft.type !== "debt") operation.createdAt = existing.createdAt;
+      if (draft.type !== "transfer" && draft.type !== "debt") operation.createdAtMs = existing.createdAtMs || Date.parse(existing.createdAt) || createdAtMs;
       operation.id = existing.id;
       operation.archived = false;
       enrichOperationAttachments(operation);
@@ -1813,14 +1915,15 @@ async function addOperation(source) {
   }
 }
 
-function buildOperation(amount) {
-  if (draft.type === "transfer") return buildTransferOperation(amount);
-  if (draft.type === "debt") return buildDebtOperation(amount);
-  return buildStandardOperation(amount);
+function buildOperation(amount, createdAtMs = Date.now()) {
+  if (draft.type === "transfer") return buildTransferOperation(amount, createdAtMs);
+  if (draft.type === "debt") return buildDebtOperation(amount, createdAtMs);
+  return buildStandardOperation(amount, createdAtMs);
 }
 
-function buildStandardOperation(amount) {
+function buildStandardOperation(amount, createdAtMs = Date.now()) {
   const category = getById(state.categories, document.getElementById("categorySelect").value);
+  const createdAt = new Date(createdAtMs).toISOString();
   return {
     id: createId(),
     type: draft.type,
@@ -1834,14 +1937,16 @@ function buildStandardOperation(amount) {
     comment: document.getElementById("commentInput").value.trim(),
     photoCount: draft.photoCount,
     attachments: clone(draft.attachments || []),
-    createdAt: new Date().toISOString(),
+    createdAt,
+    createdAtMs,
     ...operationAuthorFields(),
   };
 }
 
-function buildTransferOperation(amount) {
+function buildTransferOperation(amount, createdAtMs = Date.now()) {
   if (!draft.transferFromId || !draft.transferToId) return notify("Выберите оба счета");
   if (draft.transferFromId === draft.transferToId) return notify("Выберите разные счета");
+  const createdAt = isoFromLocalInput(document.getElementById("transferDateInput").value, new Date(createdAtMs));
   return {
     id: createId(),
     type: "transfer",
@@ -1850,12 +1955,14 @@ function buildTransferOperation(amount) {
     toAccountId: draft.transferToId,
     vat: document.getElementById("transferVatInput").checked,
     comment: document.getElementById("transferCommentInput").value.trim(),
-    createdAt: isoFromLocalInput(document.getElementById("transferDateInput").value),
+    createdAt,
+    createdAtMs: Date.parse(createdAt) || createdAtMs,
     ...operationAuthorFields(),
   };
 }
 
-function buildDebtOperation(amount) {
+function buildDebtOperation(amount, createdAtMs = Date.now()) {
+  const createdAt = isoFromLocalInput(document.getElementById("debtDateInput").value, new Date(createdAtMs));
   return {
     id: createId(),
     type: "debt",
@@ -1864,7 +1971,8 @@ function buildDebtOperation(amount) {
     accountId: draft.debtAccountId,
     counterpartyId: document.getElementById("debtCounterpartySelect").value,
     comment: document.getElementById("debtCommentInput").value.trim(),
-    createdAt: isoFromLocalInput(document.getElementById("debtDateInput").value),
+    createdAt,
+    createdAtMs: Date.parse(createdAt) || createdAtMs,
     ...operationAuthorFields(),
   };
 }
@@ -2143,6 +2251,7 @@ function saveDialogItem(form) {
 }
 
 function saveAfterDialog(form) {
+  markSettingsChanged();
   saveState();
   saveSettingsToCloud();
   closeSettingsDialog();
@@ -2169,6 +2278,7 @@ function deleteSettingsItem(mode, id) {
   if (mode === "project") state.workerContracts = state.workerContracts.filter((contract) => contract.projectId !== id);
   if (mode === "counterparty") state.workerContracts = state.workerContracts.filter((contract) => contract.counterpartyId !== id);
   if (mode === "account" || mode === "investor") groupAccountTypes(state);
+  markSettingsChanged();
   saveState();
   saveSettingsToCloud();
   render();
@@ -2188,6 +2298,7 @@ function moveSettingsItem(mode, id, direction) {
   if (currentIndex < 0 || targetIndex < 0) return;
   [collection[currentIndex], collection[targetIndex]] = [collection[targetIndex], collection[currentIndex]];
   if (mode === "account" || mode === "investor") groupAccountTypes(state);
+  markSettingsChanged();
   saveState();
   saveSettingsToCloud();
   render();
@@ -2374,6 +2485,7 @@ async function importJson(event) {
     const imported = JSON.parse(await readTextFile(file));
     if (!imported.accounts || !imported.operations) throw new Error("bad backup");
     state = normalizeState(imported);
+    markSettingsChanged();
     saveState();
     saveSettingsToCloud();
     saveOperationsToCloud(state.operations);
@@ -2456,8 +2568,13 @@ function localDateTimeValue(date) {
   return local.toISOString().slice(0, 16);
 }
 
-function isoFromLocalInput(value) {
-  return value ? new Date(value).toISOString() : new Date().toISOString();
+function isoFromLocalInput(value, fallbackDate = new Date()) {
+  if (!value) return fallbackDate.toISOString();
+  const date = new Date(value);
+  if (String(value).length <= 16) {
+    date.setSeconds(fallbackDate.getSeconds(), fallbackDate.getMilliseconds());
+  }
+  return date.toISOString();
 }
 
 function parseAmount(value) {
