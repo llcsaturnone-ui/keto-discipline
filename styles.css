@@ -528,10 +528,15 @@ textarea:focus {
 
 .choice-card.compact {
   min-height: 54px;
-  justify-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
+  padding: 8px 4px;
   font-size: 12px;
+  line-height: 1.15;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .choice-card.active {
@@ -702,6 +707,10 @@ textarea:focus {
   padding: 8px 10px 8px 12px;
 }
 
+.settings-row > span:first-child {
+  min-width: 0;
+}
+
 .settings-row .row-title {
   font-size: 16px;
   line-height: 1.2;
@@ -736,6 +745,7 @@ textarea:focus {
 .settings-actions {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 6px;
 }
 
@@ -781,6 +791,11 @@ textarea:focus {
   place-items: center;
   padding: 0;
   line-height: 1;
+}
+
+.icon-mini:disabled {
+  opacity: 0.32;
+  pointer-events: none;
 }
 
 .button-icon,
@@ -920,6 +935,30 @@ dialog::backdrop {
 
 .attachment-preview .attachment-file {
   padding: 24px;
+}
+
+.attachment-operation-info {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+.attachment-operation-info div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.attachment-operation-info strong {
+  color: var(--text);
+  text-align: right;
+  font-weight: 650;
 }
 
 .attachment-actions {

@@ -1,28 +1,5 @@
 const STORAGE_KEY = "standart-stroy-simple-app";
 
-let state = loadState();
-let draft = {
-  type: "expense",
-  accountId: "acc-tochka",
-  projectId: "project-main",
-  transferFromId: "acc-tochka",
-  transferToId: "acc-leroy",
-  debtAction: "debtOut",
-  debtAccountId: "acc-tochka",
-  vat: false,
-  photoCount: 0,
-  attachments: [],
-};
-let dialogMode = null;
-let editingItem = null;
-let selectedOverviewProjectId = state.projects[0]?.id || "";
-let editingOperationId = null;
-let settingsEditMode = false;
-let operationsEditMode = false;
-let projectContractDrafts = [];
-let operationFilter = null;
-let expandedOperationId = null;
-
 const operationChoices = [
   ["income", "Доход"],
   ["expense", "Расход"],
@@ -55,6 +32,29 @@ const debtActions = {
   gotBack: { label: "Мне дали / Мне вернули долг", sign: 1 },
   iBorrowed: { label: "Мне дали / Мне вернули долг", sign: 1 },
 };
+
+let state = loadState();
+let draft = {
+  type: "expense",
+  accountId: "acc-tochka",
+  projectId: "project-main",
+  transferFromId: "acc-tochka",
+  transferToId: "acc-leroy",
+  debtAction: "debtOut",
+  debtAccountId: "acc-tochka",
+  vat: false,
+  photoCount: 0,
+  attachments: [],
+};
+let dialogMode = null;
+let editingItem = null;
+let selectedOverviewProjectId = state.projects[0]?.id || "";
+let editingOperationId = null;
+let settingsEditMode = false;
+let operationsEditMode = false;
+let projectContractDrafts = [];
+let operationFilter = null;
+let expandedOperationId = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
@@ -121,11 +121,13 @@ function normalizeState(data) {
     operation.attachments.forEach((file) => {
       if (!file.id) file.id = createId("file");
     });
+    enrichOperationAttachments(operation, data);
   });
   data.workerContracts.forEach((contract) => {
     if (contract.monthlyAmount === undefined) contract.monthlyAmount = 0;
     if (contract.salaryDay === undefined) contract.salaryDay = "";
   });
+  groupAccountTypes(data);
   const specialAccount = data.accounts.find((account) => account.id === "acc-special");
   if (specialAccount?.kind === "Заморожено 0 ₽") specialAccount.kind = "Спецсчет";
   return data;
@@ -133,6 +135,7 @@ function normalizeState(data) {
 
 function saveState() {
   try {
+    state.operations.forEach((operation) => enrichOperationAttachments(operation));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     return true;
   } catch (error) {
@@ -392,10 +395,7 @@ function renderOverviewProjects() {
 function overviewProjectCard(project) {
   const metrics = projectMetrics(project.id);
   const completed = projectCompleted(project, metrics);
-  const left = Number(project.tenderAmount || 0) - metrics.expense;
-  const moneyLine = project.tenderAmount ? `${money(project.tenderAmount)} / ${money(metrics.expense)} / ${money(left)}` : "";
-  const subtitle = [projectSubtitle(project), moneyLine, completed ? "✓ Завершен" : ""].filter(Boolean).join(" · ");
-  return choiceCard(project.id, project.name, subtitle, selectedOverviewProjectId === project.id, "overview-project", completed ? "completed" : "");
+  return choiceCard(project.id, project.name, "", selectedOverviewProjectId === project.id, "overview-project", completed ? "completed" : "");
 }
 
 function renderOverviewProjectSummary() {
@@ -498,9 +498,75 @@ function projectCompleted(project, metrics) {
   return metrics.income > 0;
 }
 
+function operationTitle(operation, sourceState = state) {
+  if (operation.type === "transfer") return "Перевод";
+  if (operation.type === "debt") return debtActions[operation.debtAction]?.label || "Долг";
+  const type = operationTypes[operation.type] || operationTypes.expense;
+  const project = getById(sourceState.projects || [], operation.projectId);
+  return operation.type === "income" || operation.type === "expense" ? project?.name || type.label : type.label;
+}
+
+function operationAmountText(operation) {
+  if (operation.type === "transfer") return money(operation.amount);
+  if (operation.type === "debt") {
+    const action = debtActions[operation.debtAction] || debtActions.iGave;
+    return signedMoney(operation.amount, action.sign);
+  }
+  const type = operationTypes[operation.type] || operationTypes.expense;
+  return signedMoney(operation.amount, type.sign);
+}
+
 function categoryLabel(operation) {
   if (!operation.categoryId) return operation.categoryName || "Без категории";
   return getById(state.categories, operation.categoryId)?.name || operation.categoryName || "Без категории";
+}
+
+function categoryLabelFromState(operation, sourceState = state) {
+  if (!operation.categoryId) return operation.categoryName || "Без категории";
+  return getById(sourceState.categories || [], operation.categoryId)?.name || operation.categoryName || "Без категории";
+}
+
+function enrichOperationAttachments(operation, sourceState = state) {
+  if (!operation || !Array.isArray(operation.attachments)) return;
+  const meta = attachmentOperationMeta(operation, sourceState);
+  operation.attachments = operation.attachments.map((file) => ({
+    ...file,
+    operationId: operation.id,
+    operationMeta: meta,
+  }));
+}
+
+function attachmentOperationMeta(operation, sourceState = state) {
+  const account = getById(sourceState.accounts || [], operation.accountId);
+  const project = getById(sourceState.projects || [], operation.projectId);
+  const counterparty = getById(sourceState.counterparties || [], operation.counterpartyId);
+  const fromAccount = getById(sourceState.accounts || [], operation.fromAccountId);
+  const toAccount = getById(sourceState.accounts || [], operation.toAccountId);
+  return {
+    operationId: operation.id,
+    type: operation.type,
+    typeLabel: operation.type === "debt" ? debtActions[operation.debtAction]?.label || "Долг" : operationTypes[operation.type]?.label || "Операция",
+    title: operationTitle(operation, sourceState),
+    amount: Number(operation.amount || 0),
+    amountText: operationAmountText(operation),
+    createdAt: operation.createdAt,
+    dateText: operation.createdAt ? formatDate(operation.createdAt) : "",
+    accountId: operation.accountId || "",
+    accountName: account?.name || "",
+    fromAccountId: operation.fromAccountId || "",
+    fromAccountName: fromAccount?.name || "",
+    toAccountId: operation.toAccountId || "",
+    toAccountName: toAccount?.name || "",
+    projectId: operation.projectId || "",
+    projectName: project?.name || "",
+    categoryId: operation.categoryId || "",
+    categoryName: categoryLabelFromState(operation, sourceState),
+    counterpartyId: operation.counterpartyId || "",
+    counterpartyName: counterparty?.name || "",
+    vat: Boolean(operation.vat),
+    vatText: operation.vat ? "С НДС" : "Без НДС",
+    comment: operation.comment || "",
+  };
 }
 
 function categoryKey(operation) {
@@ -659,21 +725,46 @@ function renderAttachment(file) {
   `;
 }
 
+function renderAttachmentOperationInfo(operation) {
+  const rows = [
+    ["Операция", operationTitle(operation)],
+    ["Сумма", operationAmountText(operation)],
+    ...operationDetails(operation),
+  ];
+  return rows
+    .filter(([, value]) => value)
+    .map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+}
+
+function attachmentDownloadName(file, operation) {
+  const originalName = file.name || "vlozhenie";
+  const prefix = [
+    fileDateStamp(operation.createdAt),
+    operationTitle(operation),
+    operationAmountText(operation).replace(/\s/g, ""),
+  ].filter(Boolean).join(" - ");
+  return sanitizeFileName(`${prefix} - ${originalName}`);
+}
+
 function openAttachmentViewer(fileId) {
-  const file = findAttachment(fileId);
-  if (!file) return notify("Вложение не найдено");
+  const match = findAttachment(fileId);
+  if (!match) return notify("Вложение не найдено");
+  const { file, operation } = match;
   const title = file.name || "Вложение";
   const dialog = document.getElementById("attachmentDialog");
   const preview = document.getElementById("attachmentPreview");
+  const info = document.getElementById("attachmentOperationInfo");
   const openLink = document.getElementById("attachmentOpenLink");
   const downloadLink = document.getElementById("attachmentDownloadLink");
   document.getElementById("attachmentTitle").textContent = title;
   preview.innerHTML = file.type?.startsWith("image/")
     ? `<img src="${escapeAttr(file.dataUrl)}" alt="${escapeAttr(title)}" />`
     : `<div class="attachment-file">${escapeHtml(title)}</div>`;
+  info.innerHTML = renderAttachmentOperationInfo(operation);
   openLink.href = file.dataUrl;
   downloadLink.href = file.dataUrl;
-  downloadLink.download = title;
+  downloadLink.download = attachmentDownloadName(file, operation);
   if (typeof dialog.showModal === "function") {
     if (!dialog.open) dialog.showModal();
   } else {
@@ -690,7 +781,7 @@ function closeAttachmentViewer() {
 function findAttachment(fileId) {
   for (const operation of state.operations) {
     const file = (operation.attachments || []).find((item) => item.id === fileId);
-    if (file) return file;
+    if (file) return { file, operation };
   }
   return null;
 }
@@ -1095,8 +1186,12 @@ function addOperation(source) {
     if (!operation) return;
     if (existing) {
       if (draft.type !== "transfer" && draft.type !== "debt") operation.createdAt = existing.createdAt;
-      Object.assign(existing, operation, { id: existing.id, archived: false });
+      operation.id = existing.id;
+      operation.archived = false;
+      enrichOperationAttachments(operation);
+      Object.assign(existing, operation);
     } else {
+      enrichOperationAttachments(operation);
       state.operations.unshift(operation);
     }
     const saved = saveState();
@@ -1238,10 +1333,11 @@ function renderSettings() {
   document.querySelectorAll("#settingsView [data-add]").forEach((button) => {
     button.hidden = !settingsEditMode;
   });
-  renderSettingsList("settingsAccounts", state.accounts);
-  renderSettingsList("settingsProjects", state.projects);
-  renderSettingsList("settingsCategories", state.categories);
-  renderSettingsList("settingsCounterparties", state.counterparties);
+  renderSettingsList("settingsAccounts");
+  renderSettingsList("settingsInvestors");
+  renderSettingsList("settingsProjects");
+  renderSettingsList("settingsCategories");
+  renderSettingsList("settingsCounterparties");
   renderArchivedOperations();
 }
 
@@ -1270,10 +1366,11 @@ function renderArchivedOperations() {
   });
 }
 
-function renderSettingsList(elementId, items) {
+function renderSettingsList(elementId) {
   const mode = settingsModeByElementId(elementId);
+  const items = settingsItemsForMode(mode);
   document.getElementById(elementId).innerHTML = items
-    .map((item) => {
+    .map((item, index) => {
       return `
         <div class="settings-row">
           <span>
@@ -1281,6 +1378,8 @@ function renderSettingsList(elementId, items) {
           </span>
           ${settingsEditMode ? `
             <span class="settings-actions">
+              <button type="button" class="icon-mini" data-move="${mode}" data-direction="-1" data-id="${item.id}" ${index === 0 ? "disabled" : ""} aria-label="Выше">${iconSvg("up")}</button>
+              <button type="button" class="icon-mini" data-move="${mode}" data-direction="1" data-id="${item.id}" ${index === items.length - 1 ? "disabled" : ""} aria-label="Ниже">${iconSvg("down")}</button>
               <button type="button" class="icon-mini" data-edit="${mode}" data-id="${item.id}" aria-label="Редактировать">${iconSvg("edit")}</button>
               <button type="button" class="icon-mini danger-mini" data-delete="${mode}" data-id="${item.id}" aria-label="Удалить">${iconSvg("x")}</button>
             </span>
@@ -1295,11 +1394,15 @@ function renderSettingsList(elementId, items) {
   document.querySelectorAll(`[data-delete="${mode}"]`).forEach((button) => {
     button.addEventListener("click", () => deleteSettingsItem(mode, button.dataset.id));
   });
+  document.querySelectorAll(`[data-move="${mode}"]`).forEach((button) => {
+    button.addEventListener("click", () => moveSettingsItem(mode, button.dataset.id, Number(button.dataset.direction)));
+  });
 }
 
 function settingsModeByElementId(elementId) {
   return {
     settingsAccounts: "account",
+    settingsInvestors: "investor",
     settingsProjects: "project",
     settingsCategories: "category",
     settingsCounterparties: "counterparty",
@@ -1311,6 +1414,7 @@ function openSettingsDialog(mode, itemId = null) {
   editingItem = itemId ? getSettingsCollection(mode).find((item) => item.id === itemId) : null;
   const titleMap = {
     account: editingItem ? "Редактировать счет" : "Добавить счет",
+    investor: editingItem ? "Редактировать инвестора" : "Добавить инвестора",
     project: editingItem ? "Редактировать объект" : "Добавить объект",
     category: editingItem ? "Редактировать категорию" : "Добавить категорию",
     counterparty: editingItem ? "Редактировать контрагента" : "Добавить контрагента",
@@ -1336,13 +1440,12 @@ function dialogFields(mode, item = null) {
   if (mode === "account") {
     return `
       <label class="field-label">Название<input name="name" value="${escapeAttr(item?.name || "")}" required /></label>
-      <label class="field-label">Тип
-        <select name="accountRole">
-          <option value="account" ${!isPersonalAccount(item || {}) ? "selected" : ""}>Счет</option>
-          <option value="investment" ${isPersonalAccount(item || {}) ? "selected" : ""}>Вклад</option>
-        </select>
-      </label>
       <label class="field-label">Начальный баланс<input name="balance" inputmode="decimal" value="${item ? formatInputAmount(item.balance) : ""}" placeholder="0" /></label>
+    `;
+  }
+  if (mode === "investor") {
+    return `
+      <label class="field-label">Имя инвестора<input name="name" value="${escapeAttr(item?.name || "")}" required /></label>
     `;
   }
   if (mode === "project") {
@@ -1374,12 +1477,19 @@ function saveDialogItem(form) {
     if (!collection) return notify("Не выбран раздел");
     if (!name) return notify("Введите название");
     if (dialogMode === "account") {
-      const isInvestment = data.get("accountRole") === "investment";
       Object.assign(target, {
         id: target.id || createId("acc"),
         name,
-        kind: isInvestment ? "Личные средства" : "Счет",
+        kind: target.kind && !isPersonalAccount(target) ? target.kind : "Счет",
         balance: parseAmount(data.get("balance")),
+      });
+    }
+    if (dialogMode === "investor") {
+      Object.assign(target, {
+        id: target.id || createId("acc"),
+        name,
+        kind: "Личные средства",
+        balance: Number(target.balance || 0),
       });
     }
     if (dialogMode === "project") {
@@ -1401,6 +1511,7 @@ function saveDialogItem(form) {
       Object.assign(target, { id: target.id || createId("cp"), name, kind: target.kind || "Контрагент" });
     }
     if (!editingItem) collection.push(target);
+    if (dialogMode === "account" || dialogMode === "investor") groupAccountTypes(state);
     saveAfterDialog(form);
   } catch (error) {
     console.error(error);
@@ -1423,18 +1534,35 @@ function deleteSettingsItem(mode, id) {
   const index = collection.findIndex((item) => item.id === id);
   if (index < 0) return notify("Запись не найдена");
   if (index >= 0) collection.splice(index, 1);
-  if (mode === "account" && draft.accountId === id) draft.accountId = state.accounts[0]?.id || "";
-  if (mode === "account" && draft.transferFromId === id) draft.transferFromId = state.accounts[0]?.id || "";
-  if (mode === "account" && draft.transferToId === id) draft.transferToId = state.accounts.find((account) => account.id !== draft.transferFromId)?.id || draft.transferFromId;
-  if (mode === "account" && draft.debtAccountId === id) draft.debtAccountId = state.accounts[0]?.id || "";
-  if (mode === "account" && operationFilter?.type === "account" && operationFilter.accountId === id) operationFilter = null;
+  if ((mode === "account" || mode === "investor") && draft.accountId === id) draft.accountId = state.accounts[0]?.id || "";
+  if ((mode === "account" || mode === "investor") && draft.transferFromId === id) draft.transferFromId = state.accounts[0]?.id || "";
+  if ((mode === "account" || mode === "investor") && draft.transferToId === id) draft.transferToId = state.accounts.find((account) => account.id !== draft.transferFromId)?.id || draft.transferFromId;
+  if ((mode === "account" || mode === "investor") && draft.debtAccountId === id) draft.debtAccountId = state.accounts[0]?.id || "";
+  if ((mode === "account" || mode === "investor") && operationFilter?.type === "account" && operationFilter.accountId === id) operationFilter = null;
   if (mode === "project" && draft.projectId === id) draft.projectId = state.projects[0]?.id || "";
   if (mode === "project" && selectedOverviewProjectId === id) selectedOverviewProjectId = state.projects[0]?.id || "";
   if (mode === "project") state.workerContracts = state.workerContracts.filter((contract) => contract.projectId !== id);
   if (mode === "counterparty") state.workerContracts = state.workerContracts.filter((contract) => contract.counterpartyId !== id);
+  if (mode === "account" || mode === "investor") groupAccountTypes(state);
   saveState();
   render();
   notify("Удалено");
+}
+
+function moveSettingsItem(mode, id, direction) {
+  if (!settingsEditMode || !direction) return;
+  const items = settingsItemsForMode(mode);
+  const currentVisibleIndex = items.findIndex((item) => item.id === id);
+  const target = items[currentVisibleIndex + direction];
+  const collection = getSettingsCollection(mode);
+  if (!collection || !target) return;
+  const currentIndex = collection.findIndex((item) => item.id === id);
+  const targetIndex = collection.findIndex((item) => item.id === target.id);
+  if (currentIndex < 0 || targetIndex < 0) return;
+  [collection[currentIndex], collection[targetIndex]] = [collection[targetIndex], collection[currentIndex]];
+  if (mode === "account" || mode === "investor") groupAccountTypes(state);
+  saveState();
+  render();
 }
 
 function openSettingsModal() {
@@ -1461,10 +1589,26 @@ function closeSettingsDialog() {
 function getSettingsCollection(mode) {
   return {
     account: state.accounts,
+    investor: state.accounts,
     project: state.projects,
     category: state.categories,
     counterparty: state.counterparties,
   }[mode];
+}
+
+function settingsItemsForMode(mode) {
+  const collection = getSettingsCollection(mode) || [];
+  if (mode === "account") return collection.filter((item) => !isPersonalAccount(item));
+  if (mode === "investor") return collection.filter(isPersonalAccount);
+  return collection;
+}
+
+function groupAccountTypes(data) {
+  if (!Array.isArray(data.accounts)) return;
+  data.accounts = [
+    ...data.accounts.filter((account) => !isPersonalAccount(account)),
+    ...data.accounts.filter(isPersonalAccount),
+  ];
 }
 
 function getById(items, id) {
@@ -1623,6 +1767,20 @@ function dateStamp() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function fileDateStamp(value) {
+  const date = new Date(value || Date.now());
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}`;
+}
+
+function sanitizeFileName(value) {
+  return String(value || "file")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
 function formatDateOnly(value) {
   return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date(`${value}T00:00:00`));
 }
@@ -1721,6 +1879,8 @@ function iconSvg(name) {
     edit: '<path d="M4 20h4.5L19 9.5a2.1 2.1 0 0 0-3-3L5.5 17 4 20Z" /><path d="m14.5 8.5 3 3" />',
     archive: '<path d="M5 7h14" /><path d="M7 7v12h10V7" /><path d="m9.5 12.5 2.5 2.5 2.5-2.5" /><path d="M12 10v5" />',
     restore: '<path d="M7 7h6a5 5 0 1 1-4.4 7.4" /><path d="M7 7v5h5" />',
+    up: '<path d="m7 14 5-5 5 5" />',
+    down: '<path d="m7 10 5 5 5-5" />',
     x: '<path d="m7 7 10 10" /><path d="m17 7-10 10" />',
   };
   return `<svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ""}</svg>`;

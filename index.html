@@ -28,7 +28,7 @@
           <div id="accountsList" class="plain-list"></div>
           <section class="main-section">
             <div class="section-head compact-head">
-              <h2>Вклады</h2>
+              <h2>Инвесторы</h2>
             </div>
             <div id="investmentsList" class="investments-list"></div>
           </section>
@@ -216,6 +216,14 @@
 
           <div class="settings-group">
             <div class="section-head">
+              <h2>Инвесторы</h2>
+              <button class="small-action add-action" data-add="investor" aria-label="Добавить инвестора">+</button>
+            </div>
+            <div id="settingsInvestors" class="settings-list"></div>
+          </div>
+
+          <div class="settings-group">
+            <div class="section-head">
               <h2>Объекты</h2>
               <button class="small-action add-action" data-add="project" aria-label="Добавить объект">+</button>
             </div>
@@ -299,6 +307,7 @@
           </button>
         </div>
         <div id="attachmentPreview" class="attachment-preview"></div>
+        <div id="attachmentOperationInfo" class="attachment-operation-info"></div>
         <div class="attachment-actions">
           <a id="attachmentOpenLink" class="ghost-button attachment-link" target="_blank" rel="noopener">Открыть</a>
           <a id="attachmentDownloadLink" class="save-button attachment-link" download>Скачать</a>
