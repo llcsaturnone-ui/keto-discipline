@@ -1878,6 +1878,28 @@ function restoreOperation(id) {
   notify("Операция восстановлена");
 }
 
+async function deleteArchivedOperation(id) {
+  if (!canEditOperations()) return notify("Удаление доступно только владельцу");
+  const operation = getById(state.operations, id);
+  if (!operation?.archived) return notify("Операция не найдена в архиве");
+  if (!confirm("Удалить операцию из архива навсегда?")) return;
+  if (firebaseConfig().enabled && firebaseUser && firebaseDb && typeof navigator !== "undefined" && navigator.onLine === false) {
+    return notify("Для полного удаления нужна связь");
+  }
+  try {
+    if (firebaseConfig().enabled && firebaseUser && firebaseDb) {
+      await operationsCollectionRef().doc(id).delete();
+    }
+    state.operations = state.operations.filter((item) => item.id !== id);
+    saveState();
+    render();
+    notify("Операция удалена");
+  } catch (error) {
+    console.error(error);
+    notify("Не удалось удалить из облака");
+  }
+}
+
 async function addOperation(source) {
   source?.preventDefault?.();
   if (!canAddOperations()) return notify("Войдите в аккаунт");
@@ -2084,6 +2106,7 @@ function renderArchivedOperations() {
               </span>
               <span class="settings-actions">
                 <button type="button" class="icon-mini" data-restore-operation="${operation.id}" aria-label="Восстановить">${iconSvg("restore")}</button>
+                <button type="button" class="icon-mini danger-mini" data-delete-archived-operation="${operation.id}" aria-label="Удалить навсегда">${iconSvg("trash")}</button>
               </span>
             </div>
           `;
@@ -2092,6 +2115,9 @@ function renderArchivedOperations() {
     : `<div class="empty-state compact-empty">Архив пуст</div>`;
   document.querySelectorAll("[data-restore-operation]").forEach((button) => {
     button.addEventListener("click", () => restoreOperation(button.dataset.restoreOperation));
+  });
+  document.querySelectorAll("[data-delete-archived-operation]").forEach((button) => {
+    button.addEventListener("click", () => deleteArchivedOperation(button.dataset.deleteArchivedOperation));
   });
 }
 
@@ -2630,6 +2656,7 @@ function iconSvg(name) {
     edit: '<path d="M4 20h4.5L19 9.5a2.1 2.1 0 0 0-3-3L5.5 17 4 20Z" /><path d="m14.5 8.5 3 3" />',
     archive: '<path d="M5 7h14" /><path d="M7 7v12h10V7" /><path d="m9.5 12.5 2.5 2.5 2.5-2.5" /><path d="M12 10v5" />',
     restore: '<path d="M7 7h6a5 5 0 1 1-4.4 7.4" /><path d="M7 7v5h5" />',
+    trash: '<path d="M5 7h14" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M8 7l1 12h6l1-12" /><path d="M10 7V5h4v2" />',
     up: '<path d="m7 14 5-5 5 5" />',
     down: '<path d="m7 10 5 5 5-5" />',
     x: '<path d="m7 7 10 10" /><path d="m17 7-10 10" />',
