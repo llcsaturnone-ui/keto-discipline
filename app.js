@@ -2,6 +2,7 @@ const STORAGE_KEY = "standart-stroy-simple-app";
 const OFFLINE_QUEUE_KEY = "standart-stroy-offline-queue";
 const FIREBASE_SDK_VERSION = "10.12.5";
 const FIREBASE_SDK_FILES = ["firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js", "firebase-storage-compat.js"];
+const VAT_RATE = 0.22;
 
 const operationChoices = [
   ["income", "Доход"],
@@ -162,6 +163,8 @@ function normalizeState(data) {
   data.operations.forEach((operation) => {
     if (!Array.isArray(operation.attachments)) operation.attachments = [];
     if (!operation.createdAtMs) operation.createdAtMs = Date.parse(operation.createdAt) || 0;
+    if (!operation.reviewStatus) operation.reviewStatus = "checked";
+    if (!Array.isArray(operation.audit)) operation.audit = [];
     operation.attachments.forEach((file) => {
       if (!file.id) file.id = createId("file");
     });
@@ -233,6 +236,7 @@ function bindEvents() {
   document.getElementById("dialogCancelBtn").addEventListener("click", closeSettingsDialog);
   document.getElementById("attachmentCloseBtn").addEventListener("click", closeAttachmentViewer);
   document.getElementById("exportDataBtn").addEventListener("click", exportData);
+  document.getElementById("exportCsvBtn")?.addEventListener("click", exportCsvReport);
   document.getElementById("importJsonBtn").addEventListener("click", () => document.getElementById("importJsonInput").click());
   document.getElementById("importJsonInput").addEventListener("change", importJson);
   document.addEventListener("gesturestart", (event) => event.preventDefault());
@@ -691,6 +695,48 @@ async function saveOperationsToCloud(operations) {
   }
 }
 
+async function replaceOperationsInCloud(operations) {
+  if (!firebaseDb || !firebaseUser || !canManageSettings() || applyingRemoteState) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    notify("Для полной замены журнала нужна связь");
+    return;
+  }
+  cloudSyncStatus = "saving";
+  armCloudSyncTimer();
+  renderAuthPanel();
+  try {
+    let batch = firebaseDb.batch();
+    let count = 0;
+    const commitIfNeeded = async (force = false) => {
+      if (!count || (!force && count < 450)) return;
+      await batch.commit();
+      batch = firebaseDb.batch();
+      count = 0;
+    };
+    const importedIds = new Set(operations.map((operation) => operation.id).filter(Boolean));
+    const snapshot = await operationsCollectionRef().get();
+    for (const doc of snapshot.docs) {
+      if (!importedIds.has(doc.id)) {
+        batch.delete(doc.ref);
+        count += 1;
+        await commitIfNeeded();
+      }
+    }
+    for (const operation of operations) {
+      const prepared = await prepareOperationForCloud(operation);
+      batch.set(operationsCollectionRef().doc(prepared.id), prepared, { merge: false });
+      count += 1;
+      await commitIfNeeded();
+    }
+    await commitIfNeeded(true);
+    markCloudSynced();
+    renderAuthPanel();
+  } catch (error) {
+    handleCloudSyncError(error);
+    throw error;
+  }
+}
+
 async function prepareOperationForCloud(operation) {
   const prepared = clone(operation);
   prepared.attachments = await Promise.all((prepared.attachments || []).map((file) => uploadAttachmentForCloud(prepared, file)));
@@ -808,6 +854,21 @@ function roleLabel(role) {
   }[role] || "Инвестор";
 }
 
+function reviewStatusLabel(status) {
+  return status === "draft" ? "Черновик" : "Проверено";
+}
+
+function auditActionLabel(action) {
+  return {
+    created: "Создано",
+    edited: "Изменено",
+    checked: "Проверено",
+    unchecked: "Вернули в черновик",
+    archived: "В архив",
+    restored: "Восстановлено",
+  }[action] || "Действие";
+}
+
 function canManageSettings() {
   return currentRole() === "owner";
 }
@@ -820,6 +881,19 @@ function canAddOperations() {
   return currentRole() === "owner" || currentRole() === "investor";
 }
 
+function operationReviewFields() {
+  const now = new Date().toISOString();
+  if (currentRole() === "owner") {
+    return {
+      reviewStatus: "checked",
+      reviewedAt: now,
+      reviewedByUid: firebaseUser?.uid || "",
+      reviewedByEmail: firebaseUser?.email || "Владелец",
+    };
+  }
+  return { reviewStatus: "draft" };
+}
+
 function operationAuthorFields() {
   if (!firebaseUser) return {};
   return {
@@ -827,6 +901,35 @@ function operationAuthorFields() {
     createdByEmail: firebaseUser.email || "",
     createdByRole: currentRole(),
   };
+}
+
+function operationUpdateFields() {
+  return {
+    updatedAt: new Date().toISOString(),
+    updatedByUid: firebaseUser?.uid || "",
+    updatedByEmail: firebaseUser?.email || "",
+  };
+}
+
+function currentActorLabel() {
+  return firebaseUser?.email || (currentRole() === "owner" ? "Владелец" : "Инвестор");
+}
+
+function createAuditEntry(action, note = "") {
+  return {
+    id: createId("audit"),
+    action,
+    note,
+    at: new Date().toISOString(),
+    byEmail: currentActorLabel(),
+    byRole: currentRole(),
+  };
+}
+
+function appendAudit(operation, action, note = "") {
+  if (!operation) return;
+  if (!Array.isArray(operation.audit)) operation.audit = [];
+  operation.audit.push(createAuditEntry(action, note));
 }
 
 function requiresFirebaseSignIn() {
@@ -1023,6 +1126,9 @@ function bindOperationActions() {
   document.querySelectorAll("[data-archive-operation]").forEach((button) => {
     button.addEventListener("click", () => archiveOperation(button.dataset.archiveOperation));
   });
+  document.querySelectorAll("[data-toggle-review]").forEach((button) => {
+    button.addEventListener("click", () => toggleOperationReview(button.dataset.toggleReview));
+  });
   document.querySelectorAll("[data-open-attachment]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1035,6 +1141,8 @@ function renderOverview() {
   if (requiresFirebaseSignIn()) {
     document.getElementById("overviewProjectCards").innerHTML = `<div class="empty-state">Войдите в аккаунт, чтобы открыть обзор</div>`;
     document.getElementById("overviewProjectSummary").innerHTML = "";
+    const report = document.getElementById("overviewPreliminaryReport");
+    if (report) report.innerHTML = "";
     document.getElementById("overviewCategoryList").innerHTML = "";
     document.getElementById("overviewWorkerList").innerHTML = "";
     return;
@@ -1042,6 +1150,7 @@ function renderOverview() {
   syncOverviewProject();
   renderOverviewProjects();
   renderOverviewProjectSummary();
+  renderOverviewPreliminaryReport();
   renderOverviewCategories();
   renderOverviewWorkers();
 }
@@ -1092,6 +1201,42 @@ function renderOverviewProjectSummary() {
       </div>
     </article>
   `;
+}
+
+function renderOverviewPreliminaryReport() {
+  const project = getById(state.projects, selectedOverviewProjectId);
+  const container = document.getElementById("overviewPreliminaryReport");
+  if (!container) return;
+  if (!project) {
+    container.innerHTML = "";
+    return;
+  }
+  const report = projectPreliminaryReport(project.id);
+  container.innerHTML = `
+    <article class="project-summary-card report-card">
+      <div>
+        <div class="row-title">Предварительная проверка</div>
+        <div class="operation-meta">Не финальная бухгалтерия. Расчет для контроля перед сверкой.</div>
+      </div>
+      <div class="report-grid">
+        ${reportMetric("Доходы", money(report.income), "positive")}
+        ${reportMetric("Расходы", money(report.expense), "negative")}
+        ${reportMetric("Долги по работам", money(report.workerDebt), report.workerDebt > 0 ? "negative" : "")}
+        ${reportMetric("НДС с доходов", money(report.outputVat), "negative")}
+        ${reportMetric("НДС с расходов", money(report.inputVat), "positive")}
+        ${reportMetric("НДС к уплате", money(report.vatPayable), report.vatPayable > 0 ? "negative" : "positive")}
+      </div>
+      <div class="report-total">
+        <span>Предварительная прибыль</span>
+        <strong class="${report.preliminaryProfit < 0 ? "negative" : "positive"}">${money(report.preliminaryProfit)}</strong>
+      </div>
+      ${report.draftCount ? `<div class="operation-meta draft-sync">Есть непроверенные операции: ${report.draftCount}</div>` : ""}
+    </article>
+  `;
+}
+
+function reportMetric(title, value, className = "") {
+  return `<span><span class="row-subtitle">${escapeHtml(title)}</span><strong class="${className}">${escapeHtml(value)}</strong></span>`;
 }
 
 function renderOverviewCategories() {
@@ -1162,6 +1307,44 @@ function projectMetrics(projectId) {
       if (operation.type === "income") totals.income += operation.amount;
       return totals;
     }, { expense: 0, income: 0 });
+}
+
+function projectPreliminaryReport(projectId) {
+  const report = activeOperations()
+    .filter((operation) => operation.projectId === projectId)
+    .reduce((totals, operation) => {
+      if (operation.reviewStatus === "draft") totals.draftCount += 1;
+      if (operation.type === "expense") {
+        totals.expense += operation.amount;
+        if (operation.vat) totals.inputVat += vatPart(operation.amount);
+      }
+      if (operation.type === "income") {
+        totals.income += operation.amount;
+        if (operation.vat) totals.outputVat += vatPart(operation.amount);
+      }
+      return totals;
+    }, { income: 0, expense: 0, inputVat: 0, outputVat: 0, draftCount: 0 });
+  report.workerDebt = projectWorkerDebt(projectId);
+  report.vatPayable = Math.max(0, report.outputVat - report.inputVat);
+  report.preliminaryProfit = report.income - report.expense - report.workerDebt - report.vatPayable;
+  return report;
+}
+
+function projectWorkerDebt(projectId) {
+  return state.workerContracts
+    .filter((contract) => contract.projectId === projectId)
+    .reduce((sum, contract) => {
+      const project = getById(state.projects, contract.projectId);
+      const accrued = contractAccruedAmount(contract, project);
+      const paid = activeOperations()
+        .filter((operation) => operation.type === "expense" && operation.projectId === contract.projectId && operation.counterpartyId === contract.counterpartyId)
+        .reduce((paidSum, operation) => paidSum + operation.amount, 0);
+      return sum + Math.max(0, accrued.amount - paid);
+    }, 0);
+}
+
+function vatPart(amount) {
+  return Math.round((Number(amount || 0) * VAT_RATE / (1 + VAT_RATE)) * 100) / 100;
 }
 
 function projectCompleted(project, metrics) {
@@ -1319,6 +1502,7 @@ function operationRow({ id, title, meta, amount, amountClass, operation }) {
         <div>
           <div class="row-title">${escapeHtml(title)}</div>
           ${meta.filter(Boolean).map((line) => `<div class="operation-meta">${escapeHtml(line)}</div>`).join("")}
+          ${operation.reviewStatus === "draft" ? `<div class="operation-meta draft-sync">Черновик: нужно проверить</div>` : ""}
           ${operation.syncStatus === "pending" ? `<div class="operation-meta pending-sync">Ждет отправки</div>` : ""}
           ${(operation.attachments || []).length ? `<div class="operation-meta">Вложения: ${operation.attachments.length}</div>` : ""}
         </div>
@@ -1326,6 +1510,7 @@ function operationRow({ id, title, meta, amount, amountClass, operation }) {
       </div>
       ${operationsEditMode ? `
         <div class="operation-actions">
+          <button type="button" class="icon-mini ${operation.reviewStatus === "draft" ? "success-mini" : ""}" data-toggle-review="${id}" aria-label="${operation.reviewStatus === "draft" ? "Проверить операцию" : "Вернуть в черновик"}">${iconSvg(operation.reviewStatus === "draft" ? "check" : "draft")}</button>
           <button type="button" class="icon-mini" data-edit-operation="${id}" aria-label="Редактировать операцию">${iconSvg("edit")}</button>
           <button type="button" class="icon-mini" data-archive-operation="${id}" aria-label="В архив">${iconSvg("archive")}</button>
         </div>
@@ -1338,9 +1523,15 @@ function operationRow({ id, title, meta, amount, amountClass, operation }) {
 function renderOperationDetails(operation) {
   const attachments = operation.attachments || [];
   const details = operationDetails(operation);
+  const audit = operationAuditRows(operation);
   return `
     <div class="operation-details">
       ${details.map(([label, value]) => value ? `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>` : "").join("")}
+      ${audit.length ? `
+        <div class="audit-list">
+          ${audit.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+        </div>
+      ` : ""}
       ${attachments.length ? `
         <div class="attachment-grid">
           ${attachments.map(renderAttachment).join("")}
@@ -1354,6 +1545,7 @@ function operationDetails(operation) {
   const account = getById(state.accounts, operation.accountId);
   const project = getById(state.projects, operation.projectId);
   const counterparty = getById(state.counterparties, operation.counterpartyId);
+  const common = operationCommonDetails(operation);
   if (operation.type === "transfer") {
     return [
       ["Дата", formatDate(operation.createdAt)],
@@ -1361,6 +1553,7 @@ function operationDetails(operation) {
       ["Куда", getById(state.accounts, operation.toAccountId)?.name],
       ["НДС", operation.vat ? "С НДС" : "Без НДС"],
       ["Комментарий", operation.comment],
+      ...common,
     ];
   }
   if (operation.type === "debt") {
@@ -1369,6 +1562,7 @@ function operationDetails(operation) {
       ["Счет", account?.name],
       ["Контрагент", counterparty?.name],
       ["Комментарий", operation.comment],
+      ...common,
     ];
   }
   return [
@@ -1379,7 +1573,25 @@ function operationDetails(operation) {
     ["Контрагент", counterparty?.name],
     ["НДС", operation.vat ? "С НДС" : "Без НДС"],
     ["Комментарий", operation.comment],
+    ...common,
   ];
+}
+
+function operationCommonDetails(operation) {
+  return [
+    ["Статус", reviewStatusLabel(operation.reviewStatus)],
+    ["Добавил", operation.createdByEmail || ""],
+    ["Проверил", operation.reviewedByEmail || ""],
+  ];
+}
+
+function operationAuditRows(operation) {
+  return (operation.audit || [])
+    .slice(-5)
+    .map((entry) => {
+      const actor = entry.byEmail ? ` · ${entry.byEmail}` : "";
+      return `${auditActionLabel(entry.action)} · ${formatDate(entry.at)}${actor}`;
+    });
 }
 
 function renderAttachment(file) {
@@ -1873,16 +2085,44 @@ function archiveOperation(id) {
   if (!operation) return;
   if (!confirm("Перенести операцию в архив?")) return;
   operation.archived = true;
+  appendAudit(operation, "archived");
+  Object.assign(operation, operationUpdateFields());
   saveState();
   saveOperationToCloud(operation);
   render();
   notify("Операция в архиве");
 }
 
+function toggleOperationReview(id) {
+  if (!canEditOperations()) return notify("Проверка доступна только владельцу");
+  const operation = getById(state.operations, id);
+  if (!operation) return;
+  const checked = operation.reviewStatus !== "checked";
+  operation.reviewStatus = checked ? "checked" : "draft";
+  if (checked) {
+    operation.reviewedAt = new Date().toISOString();
+    operation.reviewedByUid = firebaseUser?.uid || "";
+    operation.reviewedByEmail = firebaseUser?.email || "Владелец";
+    appendAudit(operation, "checked");
+  } else {
+    operation.reviewedAt = "";
+    operation.reviewedByUid = "";
+    operation.reviewedByEmail = "";
+    appendAudit(operation, "unchecked");
+  }
+  Object.assign(operation, operationUpdateFields());
+  saveState();
+  saveOperationToCloud(operation);
+  renderOperations();
+  notify(checked ? "Операция проверена" : "Операция в черновике");
+}
+
 function restoreOperation(id) {
   const operation = getById(state.operations, id);
   if (!operation) return;
   operation.archived = false;
+  appendAudit(operation, "restored");
+  Object.assign(operation, operationUpdateFields());
   saveState();
   saveOperationToCloud(operation);
   render();
@@ -1929,10 +2169,21 @@ async function addOperation(source) {
       if (draft.type !== "transfer" && draft.type !== "debt") operation.createdAtMs = existing.createdAtMs || Date.parse(existing.createdAt) || createdAtMs;
       operation.id = existing.id;
       operation.archived = false;
+      operation.reviewStatus = existing.reviewStatus || "checked";
+      operation.reviewedAt = existing.reviewedAt || "";
+      operation.reviewedByUid = existing.reviewedByUid || "";
+      operation.reviewedByEmail = existing.reviewedByEmail || "";
+      operation.createdByUid = existing.createdByUid || operation.createdByUid;
+      operation.createdByEmail = existing.createdByEmail || operation.createdByEmail;
+      operation.createdByRole = existing.createdByRole || operation.createdByRole;
+      operation.audit = Array.isArray(existing.audit) ? clone(existing.audit) : [];
+      appendAudit(operation, "edited");
+      Object.assign(operation, operationUpdateFields());
       enrichOperationAttachments(operation);
       Object.assign(existing, operation);
       savedOperation = existing;
     } else {
+      appendAudit(operation, "created");
       enrichOperationAttachments(operation);
       state.operations.unshift(operation);
     }
@@ -1973,6 +2224,7 @@ function buildStandardOperation(amount, createdAtMs = Date.now()) {
     createdAt,
     createdAtMs,
     ...operationAuthorFields(),
+    ...operationReviewFields(),
   };
 }
 
@@ -1991,6 +2243,7 @@ function buildTransferOperation(amount, createdAtMs = Date.now()) {
     createdAt,
     createdAtMs: Date.parse(createdAt) || createdAtMs,
     ...operationAuthorFields(),
+    ...operationReviewFields(),
   };
 }
 
@@ -2007,6 +2260,7 @@ function buildDebtOperation(amount, createdAtMs = Date.now()) {
     createdAt,
     createdAtMs: Date.parse(createdAt) || createdAtMs,
     ...operationAuthorFields(),
+    ...operationReviewFields(),
   };
 }
 
@@ -2085,6 +2339,8 @@ function renderSettings() {
   editButton.classList.toggle("active", settingsEditMode);
   editButton.hidden = !canManageSettings();
   document.getElementById("exportDataBtn").hidden = requiresFirebaseSignIn();
+  const exportCsvBtn = document.getElementById("exportCsvBtn");
+  if (exportCsvBtn) exportCsvBtn.hidden = requiresFirebaseSignIn();
   document.getElementById("importJsonBtn").hidden = !canManageSettings();
   document.querySelectorAll("#settingsView [data-add]").forEach((button) => {
     button.hidden = !settingsEditMode || !canManageSettings();
@@ -2484,6 +2740,74 @@ async function exportData() {
   notify("Файл экспортирован");
 }
 
+function exportCsvReport() {
+  const headers = [
+    "ID",
+    "Статус проверки",
+    "Архив",
+    "Тип",
+    "Дата",
+    "Сумма",
+    "Знак",
+    "Счет",
+    "Откуда",
+    "Куда",
+    "Объект",
+    "Категория",
+    "Контрагент",
+    "НДС",
+    "Комментарий",
+    "Добавил",
+    "Проверил",
+    "Вложений",
+  ];
+  const rows = state.operations
+    .slice()
+    .sort(compareOperationsByTime)
+    .map((operation) => [
+      operation.id,
+      reviewStatusLabel(operation.reviewStatus),
+      operation.archived ? "Да" : "Нет",
+      operation.type === "debt" ? debtActions[operation.debtAction]?.label || "Долг" : operationTypes[operation.type]?.label || "Операция",
+      operation.createdAt ? new Date(operation.createdAt).toLocaleString("ru-RU") : "",
+      formatCsvNumber(operation.amount),
+      formatCsvNumber(operationSignedValue(operation)),
+      getById(state.accounts, operation.accountId)?.name || "",
+      getById(state.accounts, operation.fromAccountId)?.name || "",
+      getById(state.accounts, operation.toAccountId)?.name || "",
+      getById(state.projects, operation.projectId)?.name || "",
+      categoryLabel(operation),
+      getById(state.counterparties, operation.counterpartyId)?.name || "",
+      operation.vat ? "С НДС" : "Без НДС",
+      operation.comment || "",
+      operation.createdByEmail || "",
+      operation.reviewedByEmail || "",
+      (operation.attachments || []).length,
+    ]);
+  const content = "\ufeff" + [headers, ...rows].map(csvRow).join("\n");
+  downloadFile(`standart-stroy-journal-${dateStamp()}.csv`, content, "text/csv;charset=utf-8");
+  notify("CSV для Excel экспортирован");
+}
+
+function operationSignedValue(operation) {
+  if (operation.type === "transfer") return 0;
+  if (operation.type === "debt") return operation.amount * (debtActions[operation.debtAction]?.sign || 0);
+  return operation.amount * (operationTypes[operation.type]?.sign || 0);
+}
+
+function formatCsvNumber(value) {
+  return String(Math.round(Number(value || 0) * 100) / 100).replace(".", ",");
+}
+
+function csvRow(values) {
+  return values.map(csvCell).join(";");
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[;"\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
 async function shareExportFile(filename, content, type) {
   if (typeof navigator === "undefined" || typeof File === "undefined" || typeof navigator.share !== "function") return false;
   const file = new File([content], filename, { type });
@@ -2520,12 +2844,13 @@ async function importJson(event) {
   if (!file) return;
   try {
     const imported = JSON.parse(await readTextFile(file));
-    if (!imported.accounts || !imported.operations) throw new Error("bad backup");
+    if (!imported.accounts) throw new Error("bad backup");
+    if (!Array.isArray(imported.operations)) imported.operations = [];
     state = normalizeState(imported);
     markSettingsChanged();
     saveState();
-    saveSettingsToCloud();
-    saveOperationsToCloud(state.operations);
+    await saveSettingsToCloud();
+    await replaceOperationsInCloud(state.operations);
     render();
     notify("Импортировано");
   } catch (error) {
@@ -2668,6 +2993,8 @@ function iconSvg(name) {
     archive: '<path d="M5 7h14" /><path d="M7 7v12h10V7" /><path d="m9.5 12.5 2.5 2.5 2.5-2.5" /><path d="M12 10v5" />',
     restore: '<path d="M7 7h6a5 5 0 1 1-4.4 7.4" /><path d="M7 7v5h5" />',
     trash: '<path d="M5 7h14" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M8 7l1 12h6l1-12" /><path d="M10 7V5h4v2" />',
+    check: '<path d="m5 12 4 4L19 6" />',
+    draft: '<path d="M12 6v6l4 2" /><circle cx="12" cy="12" r="8" />',
     up: '<path d="m7 14 5-5 5 5" />',
     down: '<path d="m7 10 5 5 5-5" />',
     x: '<path d="m7 7 10 10" /><path d="m17 7-10 10" />',

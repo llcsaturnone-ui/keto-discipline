@@ -275,6 +275,43 @@ h2 {
   background: rgba(69, 199, 121, 0.08);
 }
 
+.report-card {
+  gap: 12px;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-grid strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.report-total {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-total strong {
+  color: var(--text);
+  font-size: 18px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .worker-card {
   border: 1px solid #232323;
   border-radius: var(--radius);
@@ -406,6 +443,11 @@ h2 {
 
 .pending-sync {
   color: var(--blue);
+  font-weight: 700;
+}
+
+.draft-sync {
+  color: #f5b84b;
   font-weight: 700;
 }
 
@@ -678,7 +720,7 @@ textarea:focus {
 
 .settings-tools {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
@@ -865,6 +907,20 @@ textarea:focus {
 
 .danger-mini {
   color: var(--danger);
+}
+
+.success-mini {
+  color: var(--green);
+}
+
+.audit-list {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: grid !important;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .bottom-nav {
